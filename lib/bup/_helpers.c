@@ -196,6 +196,115 @@ static void unpythonize_argv(void)
 #endif // not __WIN32__ or __CYGWIN__
 
 
+static PyObject *bup_write(PyObject *self, PyObject *args)
+{
+    int fd;
+    unsigned char *buf = NULL;
+    Py_ssize_t buf_len;
+    PyObject *py_ofs, *py_count;
+    if (!PyArg_ParseTuple(args, "it#OO",
+                          &fd, &buf, &buf_len, &py_ofs, &py_count))
+	return NULL;
+    assert(buf_len >= 0);
+    unsigned long long ofs, count;
+    if(!bup_ullong_from_py(&ofs, py_ofs, "offset"))
+        return NULL;
+    if(!bup_ullong_from_py(&count, py_count, "count"))
+        return NULL;
+    if(ofs > buf_len)
+    {
+        PyErr_Format(PyExc_OverflowError,
+                     "offset %llu larger than buffer length %llu",
+                     ofs, (unsigned long long) buf_len);
+        return NULL;
+    }
+    if(count > buf_len - ofs)
+    {
+        PyErr_Format(PyExc_OverflowError,
+                     "count %llu too large for offset %llu and buffer length %llu",
+                     count, ofs, (unsigned long long) buf_len);
+        return NULL;
+    }
+    size_t written = 0;
+    while (written < count)
+    {
+        const ssize_t rc = write(fd, buf + ofs + written, count);
+        if (rc == -1)
+            return PyErr_SetFromErrno(PyExc_IOError);
+        written += rc;
+        count -= rc;
+    }
+    return Py_BuildValue("O", Py_None);
+}
+
+
+static const unsigned char *find_zero_run(size_t *len,
+                                          const unsigned char *buf,
+                                          const size_t buf_len,
+                                          const size_t min_len)
+{
+    // Find the next run of zeros, if any, that's either >= min_len,
+    // or is at the end of buf.  Return a pointer to the start of the
+    // region, or NULL, and set count to the region length.
+    const unsigned char * const end = buf + buf_len;
+    while (buf != end)
+    {
+        const unsigned char * const next_zero = memchr(buf, 0, end - buf);
+        if (next_zero == NULL)
+            return NULL;
+        buf = next_zero + 1;
+        // FIXME: could start with larger chunks when appropriate.
+        while (buf != end && *buf == 0)
+            buf++;
+        if (buf == end || buf - next_zero >= min_len)
+        {
+            *len = buf - next_zero;
+            return next_zero;
+        }
+    }
+    return NULL;
+}
+
+
+static PyObject *find_sparse_region(PyObject *self, PyObject *args)
+{
+    // Return (non_sparse_n, sparse_n) describing the number of
+    // nonzero bytes followed by the number of zero bytes at the start
+    // of the given buffer, as long as sparse_n is either >= min_len,
+    // or the sparse region runs off the end of the buffer (which
+    // allows us to merge adjoining regions).  If the buffer begins
+    // with an acceptable sparse region, non_sparse_n will be 0.  If
+    // the buffer doesn't contain an acceptable sparse region,
+    // sparse_n will be 0.
+    unsigned char *buf;
+    Py_ssize_t buf_len;
+    PyObject * const py_ofs;
+    int min_len;
+    if (!PyArg_ParseTuple(args, "t#Oi", &buf, &buf_len, &py_ofs, &min_len))
+	return NULL;
+    assert(buf_len >= 0);
+    unsigned long long ofs;
+    if(!bup_ullong_from_py(&ofs, py_ofs, "offset"))
+        return NULL;
+    if(ofs > buf_len)
+    {
+        PyErr_SetString(PyExc_OverflowError, "offset larger than buffer");
+        return NULL;
+    }
+    buf += ofs;
+    buf_len -= ofs;
+    if (!buf_len)
+        return Py_BuildValue("ii", 0, 0);
+    size_t count = 0;
+    const unsigned char * const start = find_zero_run(&count, buf, buf_len, min_len);
+    if (start == NULL)
+        return Py_BuildValue("ii", buf_len, 0);
+    if (start == buf)
+        return Py_BuildValue("ii", 0, count);
+    return Py_BuildValue("ii", start - buf, count);
+}
+
+
 static PyObject *selftest(PyObject *self, PyObject *args)
 {
     if (!PyArg_ParseTuple(args, ""))
@@ -1139,6 +1248,10 @@ static PyObject *bup_fstat(PyObject *self, PyObject *args)
 
 
 static PyMethodDef helper_methods[] = {
+    { "bup_write", bup_write, METH_VARARGS,
+      "Write count bytes to fd, starting at offset." },
+    { "find_sparse_region", find_sparse_region, METH_VARARGS,
+      "Return (non_sparse_count, sparse_count) at the start of buf." },
     { "selftest", selftest, METH_VARARGS,
 	"Check that the rolling checksum rolls correctly (for unit tests)." },
     { "blobbits", blobbits, METH_VARARGS,

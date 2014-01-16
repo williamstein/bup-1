@@ -14,6 +14,25 @@ def test_parse_num():
     WVPASSEQ(pn('1e+9 k'), 1000000000 * 1024)
     WVPASSEQ(pn('-3e-3mb'), int(-0.003 * 1024 * 1024))
 
+
+@wvtest
+def test_find_sparse_region():
+    find_sparse_region = _helpers.find_sparse_region
+    WVPASSEQ(find_sparse_region('', 0, 1), (0, 0))
+    WVEXCEPT(OverflowError, find_sparse_region, '', 1, 1)
+    WVEXCEPT(OverflowError, find_sparse_region, '', -1, 1)
+    WVPASSEQ(find_sparse_region('xyz', 0, 0), (3, 0))
+    WVPASSEQ(find_sparse_region('xyz', 1, 0), (2, 0))
+    WVPASSEQ(find_sparse_region('xyz', 3, 0), (0, 0))
+    WVPASSEQ(find_sparse_region('\x00\x00\x00', 0, 0), (0, 3))
+    WVPASSEQ(find_sparse_region('\x00\x00\x00', 0, 4), (0, 3))
+    WVPASSEQ(find_sparse_region('x\x00\x00\x00', 0, 4), (1, 3))
+    WVPASSEQ(find_sparse_region('\x00\x00\x00xyz', 0, 0), (0, 3))
+    WVPASSEQ(find_sparse_region('xyz\x00\x00\x00', 0, 0), (3, 3))
+    WVPASSEQ(find_sparse_region('xyz\x00\x00\x00', 4, 0), (0, 2))
+    WVPASSEQ(find_sparse_region('xyz\x00\x00\x00', 4, 4), (0, 2))
+    WVPASSEQ(find_sparse_region('xyz\x00\x00\x00xyz', 0, 4), (9, 0))
+
 @wvtest
 def test_detect_fakeroot():
     if os.getenv('FAKEROOTKEY'):

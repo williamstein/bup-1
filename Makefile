@@ -97,6 +97,7 @@ runtests-cmdline: all
 	TMPDIR="$(test_tmp)" t/test-restore-map-owner.sh
 	TMPDIR="$(test_tmp)" t/test-restore-single-file.sh
 	TMPDIR="$(test_tmp)" t/test-rm-between-index-and-save.sh
+	TMPDIR="$(test_tmp)" t/test-sparse-files.sh
 	TMPDIR="$(test_tmp)" t/test-command-without-init-fails.sh
 	TMPDIR="$(test_tmp)" t/test-redundant-saves.sh
 	TMPDIR="$(test_tmp)" t/test-save-restore-excludes.sh
