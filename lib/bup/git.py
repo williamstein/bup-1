@@ -698,8 +698,12 @@ def _git_date(date):
     return '%d %s' % (date, time.strftime('%z', time.localtime(date)))
 
 
-def _gitenv():
-    os.environ['GIT_DIR'] = os.path.abspath(repo())
+def _gitenv(repo_dir = None):
+    if not repo_dir:
+        repo_dir = repo()
+    def env():
+        os.environ['GIT_DIR'] = os.path.abspath(repo_dir)
+    return env
 
 
 def list_refs(refname = None):
@@ -709,7 +713,7 @@ def list_refs(refname = None):
     argv = ['git', 'show-ref', '--']
     if refname:
         argv += [refname]
-    p = subprocess.Popen(argv, preexec_fn = _gitenv, stdout = subprocess.PIPE)
+    p = subprocess.Popen(argv, preexec_fn = _gitenv(), stdout = subprocess.PIPE)
     out = p.stdout.read().strip()
     rv = p.wait()  # not fatal
     if rv:
@@ -745,7 +749,7 @@ def rev_list(ref, count=None):
     if count:
         opts += ['-n', str(atoi(count))]
     argv = ['git', 'rev-list', '--pretty=format:%ct'] + opts + [ref, '--']
-    p = subprocess.Popen(argv, preexec_fn = _gitenv, stdout = subprocess.PIPE)
+    p = subprocess.Popen(argv, preexec_fn = _gitenv(), stdout = subprocess.PIPE)
     commit = None
     for row in p.stdout:
         s = row.strip()
@@ -800,7 +804,7 @@ def update_ref(refname, newval, oldval):
     assert(refname.startswith('refs/heads/'))
     p = subprocess.Popen(['git', 'update-ref', refname,
                           newval.encode('hex'), oldval.encode('hex')],
-                         preexec_fn = _gitenv)
+                         preexec_fn = _gitenv())
     _git_wait('git update-ref', p)
 
 
@@ -830,16 +834,16 @@ def init_repo(path=None):
     if os.path.exists(d) and not os.path.isdir(os.path.join(d, '.')):
         raise GitError('"%s" exists but is not a directory\n' % d)
     p = subprocess.Popen(['git', '--bare', 'init'], stdout=sys.stderr,
-                         preexec_fn = _gitenv)
+                         preexec_fn = _gitenv())
     _git_wait('git init', p)
     # Force the index version configuration in order to ensure bup works
     # regardless of the version of the installed Git binary.
     p = subprocess.Popen(['git', 'config', 'pack.indexVersion', '2'],
-                         stdout=sys.stderr, preexec_fn = _gitenv)
+                         stdout=sys.stderr, preexec_fn = _gitenv())
     _git_wait('git config', p)
     # Enable the reflog
     p = subprocess.Popen(['git', 'config', 'core.logAllRefUpdates', 'true'],
-                         stdout=sys.stderr, preexec_fn = _gitenv)
+                         stdout=sys.stderr, preexec_fn = _gitenv())
     _git_wait('git config', p)
 
 
@@ -895,7 +899,7 @@ def _git_wait(cmd, p):
 
 
 def _git_capture(argv):
-    p = subprocess.Popen(argv, stdout=subprocess.PIPE, preexec_fn = _gitenv)
+    p = subprocess.Popen(argv, stdout=subprocess.PIPE, preexec_fn = _gitenv())
     r = p.stdout.read()
     _git_wait(repr(argv), p)
     return r
@@ -934,8 +938,9 @@ class _AbortableIter:
 _ver_warned = 0
 class CatPipe:
     """Link to 'git cat-file' that is used to retrieve blob data."""
-    def __init__(self):
+    def __init__(self, repo_dir = None):
         global _ver_warned
+        self.repo_dir = repo_dir
         wanted = ('1','5','6')
         if ver() < wanted:
             if not _ver_warned:
@@ -961,7 +966,7 @@ class CatPipe:
                                   stdout=subprocess.PIPE,
                                   close_fds = True,
                                   bufsize = 4096,
-                                  preexec_fn = _gitenv)
+                                  preexec_fn = _gitenv(self.repo_dir))
 
     def _fast_get(self, id):
         if not self.p or self.p.poll() != None:
@@ -1010,7 +1015,7 @@ class CatPipe:
 
         p = subprocess.Popen(['git', 'cat-file', type, id],
                              stdout=subprocess.PIPE,
-                             preexec_fn = _gitenv)
+                             preexec_fn = _gitenv(self.repo_dir))
         for blob in chunkyreader(p.stdout):
             yield blob
         _git_wait('git cat-file', p)
