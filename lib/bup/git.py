@@ -706,14 +706,16 @@ def _gitenv(repo_dir = None):
     return env
 
 
-def list_refs(refname = None):
+def list_refs(refname = None, repo_dir = None):
     """Generate a list of tuples in the form (refname,hash).
     If a ref name is specified, list only this particular ref.
     """
     argv = ['git', 'show-ref', '--']
     if refname:
         argv += [refname]
-    p = subprocess.Popen(argv, preexec_fn = _gitenv(), stdout = subprocess.PIPE)
+    p = subprocess.Popen(argv,
+                         preexec_fn = _gitenv(repo_dir),
+                         stdout = subprocess.PIPE)
     out = p.stdout.read().strip()
     rv = p.wait()  # not fatal
     if rv:
@@ -724,9 +726,9 @@ def list_refs(refname = None):
             yield (name, sha.decode('hex'))
 
 
-def read_ref(refname):
+def read_ref(refname, repo_dir = None):
     """Get the commit id of the most recent commit made on a given ref."""
-    l = list(list_refs(refname))
+    l = list(list_refs(refname, repo_dir))
     if l:
         assert(len(l) == 1)
         return l[0][1]
@@ -734,7 +736,7 @@ def read_ref(refname):
         return None
 
 
-def rev_list(ref, count=None):
+def rev_list(ref, count=None, repo_dir=None):
     """Generate a list of reachable commits in reverse chronological order.
 
     This generator walks through commits, from child to parent, that are
@@ -749,7 +751,9 @@ def rev_list(ref, count=None):
     if count:
         opts += ['-n', str(atoi(count))]
     argv = ['git', 'rev-list', '--pretty=format:%ct'] + opts + [ref, '--']
-    p = subprocess.Popen(argv, preexec_fn = _gitenv(), stdout = subprocess.PIPE)
+    p = subprocess.Popen(argv,
+                         preexec_fn = _gitenv(repo_dir),
+                         stdout = subprocess.PIPE)
     commit = None
     for row in p.stdout:
         s = row.strip()
@@ -763,9 +767,9 @@ def rev_list(ref, count=None):
         raise GitError, 'git rev-list returned error %d' % rv
 
 
-def rev_get_date(ref):
+def rev_get_date(ref, repo_dir=None):
     """Get the date of the latest commit on the specified ref."""
-    for (date, commit) in rev_list(ref, count=1):
+    for (date, commit) in rev_list(ref, count=1, repo_dir=repo_dir):
         return date
     raise GitError, 'no such commit %r' % ref
 
@@ -1051,15 +1055,14 @@ class CatPipe:
         except StopIteration:
             log('booger!\n')
 
-def tags():
+def tags(repo_dir = None):
     """Return a dictionary of all tags in the form {hash: [tag_names, ...]}."""
     tags = {}
-    for (n,c) in list_refs():
+    for (n,c) in list_refs(repo_dir = repo_dir):
         if n.startswith('refs/tags/'):
             name = n[10:]
             if not c in tags:
                 tags[c] = []
 
             tags[c].append(name)  # more than one tag can point at 'c'
-
     return tags
