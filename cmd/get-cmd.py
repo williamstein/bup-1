@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import os, re, sys, time
+import os, re, stat, sys, time
 from bup import git, options, client, vfs
 from bup.helpers import handle_ctrl_c, hostname, log, saved_errors
 from bup.helpers import hostname, userfullname, username
@@ -40,7 +40,7 @@ def parse_commit(content):
             'message' : matches['message']}
 
 
-def tree_walker(cat_pipe, id):
+def tree_walker(cat_pipe, id, verbose=None, parent_path=[]):
     item_it = cat_pipe.get(id)
     type = item_it.next()
     # item_it is now an iterator over the object content.
@@ -50,14 +50,30 @@ def tree_walker(cat_pipe, id):
         commit_file = ''.join(item_it)
         yield (type, [commit_file])
         tree_sha = parse_commit(commit_file)['tree']
-        for tree_item in tree_walker(cat_pipe, tree_sha):
+        for tree_item in tree_walker(cat_pipe, tree_sha, verbose, parent_path):
             yield tree_item
     elif type == 'tree':
         tree_file = ''.join(item_it)
         yield (type, [tree_file])
         for (mode, name, sha) in git.tree_decode(tree_file):
-            for tree_item in tree_walker(cat_pipe, sha.encode('hex')):
-                yield tree_item
+            if not verbose:
+                for tree_item in tree_walker(cat_pipe, sha.encode('hex')):
+                    yield tree_item
+            else:
+                (demangled, bup_type) = git.demangle_name(name)
+                sub_path = parent_path + [demangled]
+                # Don't print the sub-parts of chunked files.
+                sub_v = verbose if bup_type == git.BUP_NORMAL else None
+                for tree_item in tree_walker(cat_pipe, sha.encode('hex'),
+                                             sub_v, sub_path):
+                    yield tree_item
+                if stat.S_ISDIR(mode):
+                    if bup_type == git.BUP_NORMAL:
+                        log('%s/\n' % '/'.join(sub_path))
+                    elif verbose > 1: # (and BUP_CHUNKED)
+                        log('%s\n' % '/'.join(sub_path))
+                elif verbose > 1:
+                    log('%s\n' % '/'.join(sub_path))
     else:
         raise Exception('unexpected repository object type %r' % type)
 
@@ -126,9 +142,16 @@ prevref = oldref
 for item in get_items:
     if not '/' in item:
         # For now, that means it's a hash.
-        for obj in repo_tree_walker(src_cp, item):
+        count = 0
+        for obj in repo_tree_walker(src_cp, item, opt.verbose, [item]):
             type, data_it = obj
             w.maybe_write(type, ''.join(data_it))
+            count += 1
+        if opt.verbose:
+            if count > 1 and not item.endswith('/'):
+                log('%s/\n' % item)
+            else:
+                log('%s\n' % item)
     else:
         try:
             src_n = src_top.lresolve(item)
@@ -139,7 +162,7 @@ for item in get_items:
         assert(commit_it.next() == 'commit')
         commit_content = ''.join(commit_it)
         commit_items = parse_commit(commit_content)
-        for obj in tree_walker(src_cp, commit_items['tree']):
+        for obj in tree_walker(src_cp, commit_items['tree'], opt.verbose, [item]):
             type, data_it = obj
             w.maybe_write(type, ''.join(data_it))
         if opt.tree:
@@ -163,6 +186,9 @@ for item in get_items:
             prevref = commit
             if opt.commit:
                 print commit.encode('hex')
+        if opt.verbose:
+            log('%s/\n' % item)
+
 
 w.close()  # must close before we can update the ref
         
