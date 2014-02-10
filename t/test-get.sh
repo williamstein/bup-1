@@ -18,9 +18,17 @@ WVPASS bup index src
 WVPASS bup save -n src src
 export BUP_DIR=get-dest
 WVPASS bup init
-WVPASS bup get -v -n fetched-src -s get-src src/latest
+WVPASS bup get -v -ctn fetched-src -s get-src src/latest | tee get-output.log
 WVPASS bup restore -C restore "/fetched-src/latest$(pwd)/src"
 WVPASS "$top/t/compare-trees" -c src/ restore/src/
+
+export GIT_DIR="$BUP_DIR"
+tree_id=$(WVPASS head -n 1 get-output.log) || exit $?
+commit_id=$(WVPASS tail -n -1 get-output.log) || exit $?
+WVPASS git ls-tree $tree_id
+WVPASS git cat-file commit $commit_id | head -n 1 \
+    | WVPASS grep "^tree $tree_id\$"
+unset GIT_DIR
 
 WVSTART "bup get (remote)"
 WVPASS bup get -vv -r -:"$(pwd)/get-dest" -n remote-stored-src -s get-src src/latest

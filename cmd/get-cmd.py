@@ -166,7 +166,7 @@ for item in get_items:
             type, data_it = obj
             w.maybe_write(type, ''.join(data_it))
         if opt.tree:
-            print tree
+            print commit_items['tree']
         if opt.commit or opt.name:
             # FIXME: is this what we want?
             committer =  '%s <%s@%s>' % (userfullname(), username(), hostname())
