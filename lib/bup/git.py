@@ -753,7 +753,7 @@ def rev_list(ref, count=None, repo_dir=None):
     # FIXME: if saves appended by "bup get" are going to have a
     # committer name and date that reflects the current user and time,
     # is it still ok to use %ct here, or can/should it be %at?
-    argv = ['git', 'rev-list', '--pretty=format:%ct'] + opts + [ref, '--']
+    argv = ['git', 'rev-list', '--pretty=format:%at'] + opts + [ref, '--']
     p = subprocess.Popen(argv,
                          preexec_fn = _gitenv(repo_dir),
                          stdout = subprocess.PIPE)
