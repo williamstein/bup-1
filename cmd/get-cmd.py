@@ -175,9 +175,9 @@ for item in get_items:
             new_commit = ['tree ' + commit_items['tree']]
             if prevref:
                 new_commit.append('parent %s' % prevref.encode('hex'))
-            authorline = '%s <%s> %s' % (commit_items['author-name'],
-                                         commit_items['author-mail'],
-                                         commit_items['author-date'])
+            authorline = 'author %s <%s> %s' % (commit_items['author-name'],
+                                                commit_items['author-mail'],
+                                                commit_items['author-date'])
             new_commit.extend([authorline,
                                'committer %s %s' % (committer, commit_date),
                                ''])
