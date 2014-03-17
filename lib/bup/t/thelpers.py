@@ -1,4 +1,5 @@
 import helpers
+from cStringIO import StringIO
 import math
 import os
 import bup._helpers as _helpers
@@ -143,3 +144,34 @@ def test_batchpipe():
     WVPASSEQ(next(batches), '0 1 2\n')
     WVPASSEQ(next(batches), '3 4\n')
     WVPASSEQ(next(batches, None), None)
+
+
+def test_prefixed_output():
+    out = StringIO()
+    fixer = TaggedOutput(out, 'x')
+    fixer.write('foo')
+    WVPASSEQ(out.getvalue(), '')
+    fixer.write('')
+    WVPASSEQ(out.getvalue(), '')
+    fixer.write('\n')
+    WVPASSEQ(out.getvalue(), 'xn foo\n')
+
+    out = StringIO()
+    fixer = TaggedOutput(out, 'x')
+    fixer.write('foo')
+    fixer.flush()
+    WVPASSEQ(out.getvalue(), 'x_ foo\n')
+
+    out = StringIO()
+    fixer = TaggedOutput(out, 'x')
+    fixer.write('foo\nbar')
+    WVPASSEQ(out.getvalue(), 'xn foo\n')
+    fixer.flush()
+    WVPASSEQ(out.getvalue(), 'xn foo\nx_ bar\n')
+
+    out = StringIO()
+    fixer = TaggedOutput(out, 'x')
+    fixer.write('\n')
+    WVPASSEQ(out.getvalue(), 'xn \n')
+    fixer.write('bar\n\n')
+    WVPASSEQ(out.getvalue(), 'xn \nxn bar\nxn \n')
