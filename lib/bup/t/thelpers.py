@@ -1,3 +1,4 @@
+from cStringIO import StringIO
 import math
 import os
 import bup._helpers as _helpers
@@ -77,3 +78,34 @@ def test_grafted_path_components():
              [('', None), ('a', None), ('b', None), ('c', '/'),
               ('foo', '/foo'), ('bar', '/foo/bar')])
     WVEXCEPT(Exception, grafted_path_components, 'foo', [])
+
+@wvtest
+def test_prefixed_output():
+    out = StringIO()
+    fixer = TaggedOutput(out, 'x')
+    fixer.write('foo')
+    WVPASSEQ(out.getvalue(), '')
+    fixer.write('')
+    WVPASSEQ(out.getvalue(), '')
+    fixer.write('\n')
+    WVPASSEQ(out.getvalue(), 'xn foo\n')
+
+    out = StringIO()
+    fixer = TaggedOutput(out, 'x')
+    fixer.write('foo')
+    fixer.flush()
+    WVPASSEQ(out.getvalue(), 'x_ foo\n')
+
+    out = StringIO()
+    fixer = TaggedOutput(out, 'x')
+    fixer.write('foo\nbar')
+    WVPASSEQ(out.getvalue(), 'xn foo\n')
+    fixer.flush()
+    WVPASSEQ(out.getvalue(), 'xn foo\nx_ bar\n')
+
+    out = StringIO()
+    fixer = TaggedOutput(out, 'x')
+    fixer.write('\n')
+    WVPASSEQ(out.getvalue(), 'xn \n')
+    fixer.write('bar\n\n')
+    WVPASSEQ(out.getvalue(), 'xn \nxn bar\nxn \n')
