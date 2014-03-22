@@ -4,6 +4,7 @@ The vfs.py library makes it possible to expose contents from bup's repository
 and abstracts internal name mangling and storage from the exposition layer.
 """
 import os, re, stat, time
+from itertools import chain
 from bup import git, metadata
 from helpers import *
 from bup.hashsplit import GIT_MODE_TREE, GIT_MODE_FILE
@@ -478,8 +479,11 @@ class CommitDir(Node):
 
     def _mksubs(self):
         self._subs = {}
-        refs = git.list_refs(repo_dir = self._repo_dir)
-        for ref in refs:
+        heads = git.list_refs(repo_dir=self._repo_dir, limit_to_heads=True)
+        tags = git.list_refs(repo_dir=self._repo_dir, limit_to_tags=True,
+                             include_type=True)
+        commit_tags = [x[:-1] for x in tags if x[2] == 'commit']
+        for ref in sorted(chain(heads, commit_tags)):
             #debug2('ref name: %s\n' % ref[0])
             revs = git.rev_list(ref[1].encode('hex'), repo_dir = self._repo_dir)
             for (date, commit) in revs:
@@ -513,6 +517,10 @@ class CommitList(Node):
             self._subs[name] = n1
 
 
+class CommitLink(FakeSymlink):
+    """Symlink to a commit; commit tags (.tag/commit) are CommitLinks."""
+
+
 class TagDir(Node):
     """A directory that contains all tags in the repository."""
     def __init__(self, parent, name, repo_dir = None):
@@ -520,15 +528,30 @@ class TagDir(Node):
 
     def _mksubs(self):
         self._subs = {}
-        for (name, sha) in git.list_refs(repo_dir = self._repo_dir):
-            if name.startswith('refs/tags/'):
-                name = name[10:]
-                date = git.rev_get_date(sha.encode('hex'), self._repo_dir)
-                commithex = sha.encode('hex')
+        for name, sha, type in git.list_refs(repo_dir=self._repo_dir,
+                                             include_type=True,
+                                             limit_to_tags=True):
+            assert(name.startswith('refs/tags/'))
+            name = name[10:]
+            commithex = sha.encode('hex')
+            if type == 'commit':
+                date = git.rev_get_date(sha.encode('hex'),
+                                        repo_dir=self._repo_dir)
                 target = '../.commit/%s/%s' % (commithex[:2], commithex[2:])
-                tag1 = FakeSymlink(self, name, target, repo_dir, self._repo_dir)
+                tag1 = CommitLink(self, name, target, repo_dir=self._repo_dir)
                 tag1.ctime = tag1.mtime = date
-                self._subs[name] = tag1
+            elif type == 'tree':
+                tag1 = Dir(self, name, GIT_MODE_TREE, sha, repo_dir=self._repo_dir)
+            elif type == 'blob':
+                tag1 = File(self, name, GIT_MODE_FILE, sha, git.BUP_NORMAL,
+                            repo_dir=self._repo_dir)
+            else:
+                assert(False)
+            self._subs[name] = tag1
+
+
+class BranchCommitLink(CommitLink):
+    """Symlink to a branch commit; represents a VFS save or split."""
 
 
 class BranchList(Node):
@@ -553,7 +576,7 @@ class BranchList(Node):
             ls = time.strftime('%Y-%m-%d-%H%M%S', l)
             commithex = commit.encode('hex')
             target = '../.commit/%s/%s' % (commithex[:2], commithex[2:])
-            n1 = FakeSymlink(self, ls, target, self._repo_dir)
+            n1 = BranchCommitLink(self, ls, target, self._repo_dir)
             n1.ctime = n1.mtime = date
             self._subs[ls] = n1
 
@@ -565,7 +588,7 @@ class BranchList(Node):
         (date, commit) = latest
         commithex = commit.encode('hex')
         target = '../.commit/%s/%s' % (commithex[:2], commithex[2:])
-        n1 = FakeSymlink(self, 'latest', target, self._repo_dir)
+        n1 = BranchCommitLink(self, 'latest', target, self._repo_dir)
         n1.ctime = n1.mtime = date
         self._subs['latest'] = n1
 
@@ -591,11 +614,12 @@ class RefList(Node):
         tag_dir = TagDir(self, '.tag', self._repo_dir)
         self._subs['.tag'] = tag_dir
 
-        for (name,sha) in git.list_refs(repo_dir=self._repo_dir):
-            if name.startswith('refs/heads/'):
-                name = name[11:]
-                date = git.rev_get_date(sha.encode('hex'),
-                                        repo_dir=self._repo_dir)
-                n1 = BranchList(self, name, sha, self._repo_dir)
-                n1.ctime = n1.mtime = date
-                self._subs[name] = n1
+        for (name,sha) in git.list_refs(repo_dir=self._repo_dir,
+                                        limit_to_heads=True):
+            assert(name.startswith('refs/heads/'))
+            name = name[11:]
+            date = git.rev_get_date(sha.encode('hex'),
+                                    repo_dir=self._repo_dir)
+            n1 = BranchList(self, name, sha, self._repo_dir)
+            n1.ctime = n1.mtime = date
+            self._subs[name] = n1
