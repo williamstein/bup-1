@@ -92,6 +92,7 @@ runtests-cmdline: all
 	TMPDIR="$(test_tmp)" t/test-cat-file.sh
 	TMPDIR="$(test_tmp)" t/test-compression.sh
 	TMPDIR="$(test_tmp)" t/test-fsck.sh
+	TMPDIR="$(test_tmp)" t/test-get.sh
 	TMPDIR="$(test_tmp)" t/test-index-clear.sh
 	TMPDIR="$(test_tmp)" t/test-index-check-device.sh
 	TMPDIR="$(test_tmp)" t/test-ls.sh
@@ -115,6 +116,12 @@ test: all
 	./wvtestrun $(MAKE) PYTHON=$(PYTHON) runtests
 
 check: test
+
+long-test: export BUP_TEST_LEVEL=11
+long-test: test
+
+long-check: export BUP_TEST_LEVEL=11
+long-check: check
 
 bup: main.py
 	rm -f $@
