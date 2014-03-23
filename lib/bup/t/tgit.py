@@ -1,5 +1,5 @@
 import struct, os, tempfile, time
-from subprocess import check_call, check_output
+from subprocess import check_call
 from bup import git
 from bup.helpers import *
 from wvtest import *
@@ -13,7 +13,7 @@ def ex(*cmd):
 def exo(*cmd):
     cmd_str = ' '.join(cmd)
     print >> sys.stderr, cmd_str
-    return check_output(cmd)
+    return readpipe(cmd)
 
 
 top_dir = os.path.realpath('../../..')

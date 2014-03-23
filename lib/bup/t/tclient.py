@@ -1,7 +1,7 @@
 import sys, os, stat, time, random, subprocess, glob, tempfile
-from subprocess import check_call, check_output
+from subprocess import check_call
 from bup import client, git
-from bup.helpers import mkdirp
+from bup.helpers import mkdirp, readpipe
 from wvtest import *
 
 
@@ -14,7 +14,7 @@ def ex(*cmd):
 def exo(*cmd):
     cmd_str = ' '.join(cmd)
     print >> sys.stderr, cmd_str
-    return check_output(cmd)
+    return readpipe(cmd)
 
 
 def randbytes(sz):
@@ -208,7 +208,7 @@ def test_path_info():
     WVPASS(len(info) == 1)
     WVPASS(info[0] is None)
 
-    data = exo(bup_exe, 'random', '128k' )
+    data = exo(bup_exe, 'random', '128k')
     with open(src + '/chunky', 'wb+') as f:
         f.write(data)
     ex(bup_exe, 'index', '-vv', src)
