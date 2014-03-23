@@ -3,6 +3,7 @@ bup repositories are in Git format. This library allows us to
 interact with the Git data structures.
 """
 import os, sys, zlib, time, subprocess, struct, stat, re, tempfile, glob
+from itertools import islice, izip
 from bup.helpers import *
 from bup import _helpers, path, midx, bloom, xstat
 
@@ -722,11 +723,23 @@ def _gitenv(repo_dir = None):
     return env
 
 
-def list_refs(refname = None, repo_dir = None):
-    """Generate a list of tuples in the form (refname,hash).
-    If a ref name is specified, list only this particular ref.
+def list_refs(refname=None, repo_dir=None, include_type=False,
+              limit_to_heads=False, limit_to_tags=False):
+    """Generate a list of tuples in the form (refname, hash) or if
+    include_type is specified, (refname, hash, type); the type will be
+    'commit', 'tree', or 'blob'.  If a ref name is specified, list
+    only that particular ref.  The limits restrict the result items to
+    refs/heads or refs/tags.  If both limits are specified, items from
+    both sources will be included.
+
     """
-    argv = ['git', 'show-ref', '--']
+    # For now, this doesn't stream anything.
+    argv = ['git', 'show-ref']
+    if limit_to_heads:
+        argv.append('--heads')
+    if limit_to_tags:
+        argv.append('--tags')
+    argv.append('--')
     if refname:
         argv += [refname]
     p = subprocess.Popen(argv,
@@ -737,14 +750,33 @@ def list_refs(refname = None, repo_dir = None):
     if rv:
         assert(not out)
     if out:
-        for d in out.split('\n'):
-            (sha, name) = d.split(' ', 1)
-            yield (name, sha.decode('hex'))
+        if not include_type:
+            for d in out.split('\n'):
+                sha, name = d.split(' ', 1)
+                yield (name, sha.decode('hex'))
+        else:
+            names = []
+            hashes = []
+            for d in out.split('\n'):
+                sha, name = d.split(' ', 1)
+                names.append(name)
+                hashes.append(sha)
+            p = subprocess.Popen(['git', 'cat-file',
+                                  '--batch-check=%(objecttype)'],
+                                 preexec_fn = _gitenv(repo_dir),
+                                 stdin = subprocess.PIPE,
+                                 stdout = subprocess.PIPE)
+            out, err = p.communicate('\n'.join(hashes))
+            types = out.strip().split('\n')
+            assert(p.wait() == 0)
+            for h, n, t in izip(hashes, names, types):
+                yield n, h.decode('hex'), t
 
 
-def read_ref(refname, repo_dir = None):
+def read_ref(refname, repo_dir=None):
     """Get the commit id of the most recent commit made on a given ref."""
-    l = list(list_refs(refname, repo_dir))
+    refs = list_refs(refname, repo_dir=repo_dir, limit_to_heads=True)
+    l = tuple(islice(refs, 2))
     if l:
         assert(len(l) == 1)
         return l[0][1]
@@ -1072,14 +1104,14 @@ class CatPipe:
         except StopIteration:
             log('booger!\n')
 
+
 def tags(repo_dir = None):
     """Return a dictionary of all tags in the form {hash: [tag_names, ...]}."""
     tags = {}
-    for (n,c) in list_refs(repo_dir = repo_dir):
-        if n.startswith('refs/tags/'):
-            name = n[10:]
-            if not c in tags:
-                tags[c] = []
-
-            tags[c].append(name)  # more than one tag can point at 'c'
+    for (n,c) in list_refs(repo_dir = repo_dir, limit_to_tags=True):
+        assert(n.startswith('refs/tags/'))
+        name = n[10:]
+        if not c in tags:
+            tags[c] = []
+        tags[c].append(name)  # more than one tag can point at 'c'
     return tags
