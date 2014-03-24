@@ -258,17 +258,45 @@ def test_list_refs():
     WVPASSEQ(frozenset(git.list_refs()), expected_tags)
     WVPASSEQ(frozenset(git.list_refs(limit_to_heads=True)), frozenset([]))
     WVPASSEQ(frozenset(git.list_refs(limit_to_tags=True)), expected_tags)
+    if wvfailure_count() == initial_failures:
+        subprocess.call(['rm', '-rf', tmpdir])
 
+
+@wvtest
+def test_object_info():
+    initial_failures = wvfailure_count()
+    tmpdir = tempfile.mkdtemp(dir=bup_tmp, prefix='bup-tgit-')
+    os.environ['BUP_MAIN_EXE'] = bup_exe
+    os.environ['BUP_DIR'] = bupdir = tmpdir + "/bup"
+    src = tmpdir + '/src'
+    mkdirp(src)
+    with open(src + '/1', 'w+') as f:
+        print f, 'something'
+    with open(src + '/2', 'w+') as f:
+        print f, 'something else'
+    git.init_repo(bupdir)
+    WVPASSEQ(list(git.object_info([])), [])
+    ex(bup_exe, 'index', src)
     ex(bup_exe, 'save', '-n', 'src', '--strip', src)
-    src_hash2 = exo('git', '--git-dir', bupdir,
-                    'rev-parse', 'src').strip().split('\n')
-    assert(len(src_hash2) == 1)
-    src_hash2 = src_hash2[0].decode('hex')
-    expected_types = frozenset([('refs/heads/src', src_hash2, 'commit'),
-                                ('refs/tags/commit-tag', src_hash, 'commit'),
-                                ('refs/tags/tree-tag', tree_hash, 'tree'),
-                                ('refs/tags/blob-tag', blob_hash, 'blob')])
-    WVPASSEQ(frozenset(git.list_refs(include_type=True)), expected_types)
 
+    src_hash = exo('git', '--git-dir', bupdir,
+                   'rev-parse', 'src').strip().split('\n')[0]
+    src_size = int(exo('git', '--git-dir', bupdir,
+                       'cat-file', '-s', 'src').strip().split('\n')[0])
+
+    tree_hash = exo('git', '--git-dir', bupdir,
+                   'rev-parse', 'src:').strip().split('\n')[0]
+    tree_size = int(exo('git', '--git-dir', bupdir,
+                        'cat-file', '-s', 'src:').strip().split('\n')[0])
+
+    blob_hash = exo('git', '--git-dir', bupdir,
+                   'rev-parse', 'src:1').strip().split('\n')[0]
+    blob_size = int(exo('git', '--git-dir', bupdir,
+                        'cat-file', '-s', 'src:1').strip().split('\n')[0])
+
+    WVPASSEQ(tuple(git.object_info([src_hash, tree_hash, blob_hash])),
+             ((src_hash.decode('hex'), 'commit', src_size),
+              (tree_hash.decode('hex'), 'tree', tree_size),
+              (blob_hash.decode('hex'), 'blob', blob_size)))
     if wvfailure_count() == initial_failures:
         subprocess.call(['rm', '-rf', tmpdir])

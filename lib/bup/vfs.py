@@ -4,7 +4,7 @@ The vfs.py library makes it possible to expose contents from bup's repository
 and abstracts internal name mangling and storage from the exposition layer.
 """
 import os, re, stat, time
-from itertools import chain
+from itertools import chain, izip, tee
 from bup import git, metadata
 from helpers import *
 from bup.hashsplit import GIT_MODE_TREE, GIT_MODE_FILE
@@ -483,9 +483,12 @@ class CommitDir(Node):
     def _mksubs(self):
         self._subs = {}
         heads = git.list_refs(repo_dir=self._repo_dir, limit_to_heads=True)
-        tags = git.list_refs(repo_dir=self._repo_dir, limit_to_tags=True,
-                             include_type=True)
-        commit_tags = [x[:-1] for x in tags if x[2] == 'commit']
+        tags = git.list_refs(repo_dir=self._repo_dir, limit_to_tags=True)
+        tags, tags_dup = tee(tags)
+        tags_info = git.object_info((x[1].encode('hex') for x in tags_dup),
+                                    repo_dir=self._repo_dir)
+        commit_tags = (ref for ref, info in izip(tags, tags_info)
+                       if info[1] == 'commit')
         for ref in sorted(chain(heads, commit_tags)):
             #debug2('ref name: %s\n' % ref[0])
             revs = git.rev_list(ref[1].encode('hex'), repo_dir = self._repo_dir)
@@ -531,12 +534,16 @@ class TagDir(Node):
 
     def _mksubs(self):
         self._subs = {}
-        for name, sha, type in git.list_refs(repo_dir=self._repo_dir,
-                                             include_type=True,
-                                             limit_to_tags=True):
+
+        tags = git.list_refs(repo_dir=self._repo_dir, limit_to_tags=True)
+        tags, tags_dup = tee(tags)
+        tags_info = git.object_info((x[1].encode('hex') for x in tags_dup),
+                                    repo_dir=self._repo_dir)
+        for (name, sha), info in izip(tags, tags_info):
             assert(name.startswith('refs/tags/'))
             name = name[10:]
             commithex = sha.encode('hex')
+            type = info[1]
             if type == 'commit':
                 date = git.rev_get_date(sha.encode('hex'),
                                         repo_dir=self._repo_dir)

@@ -3,7 +3,7 @@ bup repositories are in Git format. This library allows us to
 interact with the Git data structures.
 """
 import os, sys, zlib, time, subprocess, struct, stat, re, tempfile, glob
-from itertools import islice, izip
+from itertools import islice
 from bup.helpers import *
 from bup import _helpers, path, midx, bloom, xstat
 
@@ -723,17 +723,15 @@ def _gitenv(repo_dir = None):
     return env
 
 
-def list_refs(refname=None, repo_dir=None, include_type=False,
+def list_refs(refname=None, repo_dir=None,
               limit_to_heads=False, limit_to_tags=False):
-    """Generate a list of tuples in the form (refname, hash) or if
-    include_type is specified, (refname, hash, type); the type will be
-    'commit', 'tree', or 'blob'.  If a ref name is specified, list
-    only that particular ref.  The limits restrict the result items to
+    """Yield (refname, hash) tuples for all repository refs unless a ref
+    name is specified.  Given a ref name, only include tuples for that
+    particular ref.  The limits restrict the result items to
     refs/heads or refs/tags.  If both limits are specified, items from
     both sources will be included.
 
     """
-    # For now, this doesn't stream anything.
     argv = ['git', 'show-ref']
     if limit_to_heads:
         argv.append('--heads')
@@ -750,27 +748,34 @@ def list_refs(refname=None, repo_dir=None, include_type=False,
     if rv:
         assert(not out)
     if out:
-        if not include_type:
-            for d in out.split('\n'):
-                sha, name = d.split(' ', 1)
-                yield (name, sha.decode('hex'))
-        else:
-            names = []
-            hashes = []
-            for d in out.split('\n'):
-                sha, name = d.split(' ', 1)
-                names.append(name)
-                hashes.append(sha)
-            p = subprocess.Popen(['git', 'cat-file',
-                                  '--batch-check=%(objecttype)'],
-                                 preexec_fn = _gitenv(repo_dir),
-                                 stdin = subprocess.PIPE,
-                                 stdout = subprocess.PIPE)
-            out, err = p.communicate('\n'.join(hashes))
-            types = out.strip().split('\n')
-            assert(p.wait() == 0)
-            for h, n, t in izip(hashes, names, types):
-                yield n, h.decode('hex'), t
+        for d in out.split('\n'):
+            sha, name = d.split(' ', 1)
+            yield (name, sha.decode('hex'))
+
+
+def object_info(objects, repo_dir=None):
+    """Yield (hash, type, size), tuples for each object named in objects.
+    The type will be 'commit', 'tree', 'blob', or 'missing'.  For now,
+    this accepts the same object names that git cat-file does.
+
+    """
+    p = subprocess.Popen(['git', 'cat-file', '--batch-check'],
+                         preexec_fn=_gitenv(repo_dir),
+                         stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE)
+    out, err = p.communicate('\n'.join(objects))
+    assert(p.returncode == 0)
+    out = out.strip()
+    if not out:
+        return
+    for line in out.split('\n'):
+        info = line.split(' ')
+        type = info[1]
+        if type == 'missing':
+            yield info[0].decode('hex'), type, None
+        else:  # id, type, size = info
+            yield info[0].decode('hex'), type, int(info[2])
+
 
 
 def read_ref(refname, repo_dir=None):
