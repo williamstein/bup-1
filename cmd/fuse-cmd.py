@@ -69,8 +69,8 @@ class BupFs(fuse.Fuse):
                 m = node.metadata()
                 if m:
                     st.st_mode = m.mode
-                    st.st_uid = m.uid
-                    st.st_gid = m.gid
+                    st.st_uid = opt.uid if opt.uid is not None else m.uid
+                    st.st_gid = opt.gid if opt.gid is not None else m.gid
                     st.st_atime = max(0, xstat.fstime_floor_secs(m.atime))
                     st.st_mtime = max(0, xstat.fstime_floor_secs(m.mtime))
                     st.st_ctime = max(0, xstat.fstime_floor_secs(m.ctime))
@@ -122,6 +122,8 @@ d,debug   increase debug level
 f,foreground  run in foreground
 o,allow-other allow other users to access the filesystem
 meta          report original metadata for paths when available
+uid=    make all files appear to have this uid
+gid=    make all files appear to have this gid
 """
 o = options.Options(optspec)
 (opt, flags, extra) = o.parse(sys.argv[1:])
