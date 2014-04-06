@@ -65,7 +65,8 @@ class BupFs(fuse.Fuse):
             st.st_mode = node.mode
             st.st_nlink = node.nlinks()
             st.st_size = node.size()  # Until/unless we store the size in m.
-            if self.meta:
+            real_node = path.count('/') > 3
+            if self.meta and real_node:
                 m = node.metadata()
                 if m:
                     st.st_mode = m.mode
