@@ -2,6 +2,7 @@
 bup repositories are in Git format. This library allows us to
 interact with the Git data structures.
 """
+import cPickle as pickle;
 import os, sys, zlib, time, subprocess, struct, stat, re, tempfile, glob
 from collections import namedtuple
 
@@ -805,23 +806,49 @@ def rev_list(ref, count=None):
     If count is a non-zero integer, limit the number of commits to "count"
     objects.
     """
+    # We cache rev_list on disk because each call to rev_list involves a
+    # subprocess call to git, which takes a fraction of a second, and these
+    # add up to bup being *unusable* if there are thousands of branches.
+    # For some reason (?) bup calls rev_list on startup for *every*
+    # single branch in the repository before doing "bup ls",
+    # "bup restore", etc.
+
+    # Cache the git rev-list in a new directory called cache.
+    REV_CACHE = os.path.join(os.environ['BUP_DIR'], 'cache', 'rev_list')  # must be in here, not global scope so BUP_DIR is set.
+    if not os.path.exists(REV_CACHE):
+        os.makedirs(REV_CACHE)
+
+    cache = os.path.join(REV_CACHE, ref)
+    if os.path.exists(cache):
+        v = pickle.loads(open(cache).read())
+        if count is None:
+            return v
+        else:
+            return v[:count]
+
     assert(not ref.startswith('-'))
-    opts = []
-    if count:
-        opts += ['-n', str(atoi(count))]
-    argv = ['git', 'rev-list', '--pretty=format:%at'] + opts + [ref, '--']
-    p = subprocess.Popen(argv, preexec_fn = _gitenv, stdout = subprocess.PIPE)
+    argv = ['git', 'rev-list', '--pretty=format:%at'] + [ref, '--']
+    p = subprocess.Popen(argv,
+                         preexec_fn = _gitenv,
+                         stdout = subprocess.PIPE)
     commit = None
+    v = []
     for row in p.stdout:
         s = row.strip()
         if s.startswith('commit '):
             commit = s[7:].decode('hex')
         else:
             date = int(s)
-            yield (date, commit)
+            v.append((date, commit))
     rv = p.wait()  # not fatal
     if rv:
         raise GitError, 'git rev-list returned error %d' % rv
+
+    open(cache,'wb').write(pickle.dumps(v))
+    if count is None:
+        return v
+    else:
+        return v[:count]
 
 
 def get_commit_dates(refs):
