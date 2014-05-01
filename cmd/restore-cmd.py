@@ -315,18 +315,21 @@ for d in extra:
             do_root(n, owner_map, restore_root_meta = (name == '.'))
     else:
         # Source is /foo/what/ever -- extract ./ever to cwd.
+        target = n
         if isinstance(n, vfs.FakeSymlink):
-            # Source is actually /foo/what, i.e. a top-level commit
-            # like /foo/latest, which is a symlink to ../.commit/SHA.
-            # So dereference it, and restore ../.commit/SHA/. to
-            # "./what/.".
+            # Source is actually something like /foo/latest or
+            # /foo/some-tag, so dereference it, and restore the result
+            # to "./latest/." or "./some-tag/.".
             target = n.dereference()
+            isdir = stat.S_ISDIR(target.mode)
+        if isdir:
             mkdirp(n.name)
             os.chdir(n.name)
             do_root(target, owner_map)
-        else: # Not a directory or fake symlink.
-            meta = find_dir_item_metadata_by_name(n.parent, n.name)
-            do_node(n.parent, n, owner_map, meta = meta)
+        else:
+            meta = target.metadata()
+            target.name = n.name  # Ugly.
+            do_node(target.parent, target, owner_map, meta = meta)
 
 if not opt.quiet:
     progress('Restoring: %d, done.\n' % total_restored)

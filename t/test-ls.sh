@@ -35,23 +35,19 @@ WVSTART "ls (short)"
 
 WVPASSEQ "$(WVPASS bup ls /)" "src"
 
-WVPASSEQ "$(WVPASS bup ls -A /)" ".commit
-.tag
+WVPASSEQ "$(WVPASS bup ls -A /)" ".tag
 src"
 
-WVPASSEQ "$(WVPASS bup ls -AF /)" ".commit/
-.tag/
+WVPASSEQ "$(WVPASS bup ls -AF /)" ".tag/
 src/"
 
 WVPASSEQ "$(WVPASS bup ls -a /)" ".
 ..
-.commit
 .tag
 src"
 
 WVPASSEQ "$(WVPASS bup ls -aF /)" "./
 ../
-.commit/
 .tag/
 src/"
 
@@ -98,26 +94,22 @@ WVPASSEQ "$(WVPASS bup ls -l / | tr -s ' ' ' ')" \
 "d--------- ?/? 0 1970-01-01 00:00 src"
 
 WVPASSEQ "$(WVPASS bup ls -lA / | tr -s ' ' ' ')" \
-"d--------- ?/? 0 1970-01-01 00:00 .commit
-d--------- ?/? 0 1970-01-01 00:00 .tag
+"d--------- ?/? 0 1970-01-01 00:00 .tag
 d--------- ?/? 0 1970-01-01 00:00 src"
 
 WVPASSEQ "$(WVPASS bup ls -lAF / | tr -s ' ' ' ')" \
-"d--------- ?/? 0 1970-01-01 00:00 .commit/
-d--------- ?/? 0 1970-01-01 00:00 .tag/
+"d--------- ?/? 0 1970-01-01 00:00 .tag/
 d--------- ?/? 0 1970-01-01 00:00 src/"
 
 WVPASSEQ "$(WVPASS bup ls -la / | tr -s ' ' ' ')" \
 "d--------- ?/? 0 1970-01-01 00:00 .
 d--------- ?/? 0 1970-01-01 00:00 ..
-d--------- ?/? 0 1970-01-01 00:00 .commit
 d--------- ?/? 0 1970-01-01 00:00 .tag
 d--------- ?/? 0 1970-01-01 00:00 src"
 
 WVPASSEQ "$(WVPASS bup ls -laF / | tr -s ' ' ' ')" \
 "d--------- ?/? 0 1970-01-01 00:00 ./
 d--------- ?/? 0 1970-01-01 00:00 ../
-d--------- ?/? 0 1970-01-01 00:00 .commit/
 d--------- ?/? 0 1970-01-01 00:00 .tag/
 d--------- ?/? 0 1970-01-01 00:00 src/"
 
@@ -197,7 +189,7 @@ WVPASSEQ "$(bup ls -ld "src/latest$tmpdir/src" | tr -s ' ' ' ')" \
 
 WVSTART "ls (backup set - long)"
 WVPASSEQ "$(bup ls -l src | cut -d' ' -f 1-2)" \
-"l--------- ?/?
+"drwxr-xr-x root/root
 l--------- ?/?"
 
 

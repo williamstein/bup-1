@@ -31,8 +31,8 @@ external tools.
 
 Note that `bup ls` doesn't show hidden files by default and one needs to use
 the `-a` option to show them. Files are hidden when their name begins with a
-dot. For example, on the topmost level, the special directories named `.commit`
-and `.tag` are hidden directories.
+dot.  For example, at the topmost level, the directory named `.tag` is
+a hidden directory.
 
 Once you have identified the file you want using `bup ls`,
 you can view its contents using `bup join` or `git show`.

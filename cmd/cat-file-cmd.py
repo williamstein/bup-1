@@ -36,8 +36,7 @@ except vfs.NodeError, e:
     o.fatal(e)
 
 if isinstance(n, vfs.FakeSymlink):
-    # Source is actually /foo/what, i.e. a top-level commit
-    # like /foo/latest, which is a symlink to ../.commit/SHA.
+    # Source is actually something like /foo/latest or /foo/some-tag.
     # So dereference it.
     target = n.dereference()
 
