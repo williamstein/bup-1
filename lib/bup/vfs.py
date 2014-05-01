@@ -221,7 +221,7 @@ class Node(object):
 
         If this node isn't inside a backup set, return the root level.
         """
-        if self.parent and not isinstance(self.parent, CommitList):
+        if self.parent and not isinstance(self.parent, BranchList):
             return self.parent.fs_top()
         else:
             return self
@@ -454,56 +454,6 @@ class Dir(Node):
         super(Dir, self).release()
 
 
-class CommitDir(Node):
-    """A directory that contains all commits that are reachable by a ref.
-
-    Contains a set of subdirectories named after the commits' first byte in
-    hexadecimal. Each of those directories contain all commits with hashes that
-    start the same as the directory name. The name used for those
-    subdirectories is the hash of the commit without the first byte. This
-    separation helps us avoid having too much directories on the same level as
-    the number of commits grows big.
-    """
-    def __init__(self, parent, name):
-        Node.__init__(self, parent, name, GIT_MODE_TREE, EMPTY_SHA)
-
-    def _mksubs(self):
-        self._subs = {}
-        refs = git.list_refs()
-        for ref in refs:
-            #debug2('ref name: %s\n' % ref[0])
-            revs = git.rev_list(ref[1].encode('hex'))
-            for (date, commit) in revs:
-                #debug2('commit: %s  date: %s\n' % (commit.encode('hex'), date))
-                commithex = commit.encode('hex')
-                containername = commithex[:2]
-                dirname = commithex[2:]
-                n1 = self._subs.get(containername)
-                if not n1:
-                    n1 = CommitList(self, containername)
-                    self._subs[containername] = n1
-
-                if n1.commits.get(dirname):
-                    # Stop work for this ref, the rest should already be present
-                    break
-
-                n1.commits[dirname] = (commit, date)
-
-
-class CommitList(Node):
-    """A list of commits with hashes that start with the current node's name."""
-    def __init__(self, parent, name):
-        Node.__init__(self, parent, name, GIT_MODE_TREE, EMPTY_SHA)
-        self.commits = {}
-
-    def _mksubs(self):
-        self._subs = {}
-        for (name, (hash, date)) in self.commits.items():
-            n1 = Dir(self, name, GIT_MODE_TREE, hash)
-            n1.ctime = n1.mtime = date
-            self._subs[name] = n1
-
-
 class TagDir(Node):
     """A directory that contains all tags in the repository."""
     def __init__(self, parent, name):
@@ -515,18 +465,23 @@ class TagDir(Node):
             if name.startswith('refs/tags/'):
                 name = name[10:]
                 date = git.get_commit_dates([sha.encode('hex')])[0]
-                commithex = sha.encode('hex')
-                target = '../.commit/%s/%s' % (commithex[:2], commithex[2:])
-                tag1 = FakeSymlink(self, name, target)
-                tag1.ctime = tag1.mtime = date
-                self._subs[name] = tag1
+                n = self.parent.get_cached_obj(sha)
+                if not n:
+                    # FIXME: support non-dirs.
+                    n = Dir(self, name, GIT_MODE_TREE, sha)
+                    self.parent.cache_obj(commit, n)
+                self._subs[name] = n
 
 
 class BranchList(Node):
-    """A list of links to commits reachable by a branch in bup's repository.
+    """A list of commits to a given branch in bup's repository.
 
-    Represents each commit as a symlink that points to the commit directory in
-    /.commit/??/ . The symlink is named after the commit date.
+    Each commit will appear with a name that matches its commit date
+    (currently formatted like 2012-12-31-132500 -- beware duplicates),
+    and each commit that has been tagged will also be accessible via
+    ./.tag/TAGNAME (in addition to /.tag/TAGNAME).  Finally, the name
+    "latest" will always refer to the most recent commit.
+
     """
     def __init__(self, parent, name, hash):
         Node.__init__(self, parent, name, GIT_MODE_TREE, hash)
@@ -537,25 +492,24 @@ class BranchList(Node):
         tags = git.tags()
 
         revs = list(git.rev_list(self.hash.encode('hex')))
-        latest = revs[0]
+        latest = revs[0][0]
         for (date, commit) in revs:
             l = time.localtime(date)
             ls = time.strftime('%Y-%m-%d-%H%M%S', l)
-            commithex = commit.encode('hex')
-            target = '../.commit/%s/%s' % (commithex[:2], commithex[2:])
-            n1 = FakeSymlink(self, ls, target)
-            n1.ctime = n1.mtime = date
+            n1 = self.parent.get_cached_obj(commit)
+            if not n1:
+                n1 = Dir(self, ls, GIT_MODE_TREE, commit)
+                self.parent.cache_obj(commit, n1)
             self._subs[ls] = n1
 
             for tag in tags.get(commit, []):
-                t1 = FakeSymlink(self, tag, target)
+                t1 = FakeSymlink(self, tag, '/.tag/' + tag)
                 t1.ctime = t1.mtime = date
                 self._subs[tag] = t1
 
-        (date, commit) = latest
-        commithex = commit.encode('hex')
-        target = '../.commit/%s/%s' % (commithex[:2], commithex[2:])
-        n1 = FakeSymlink(self, 'latest', target)
+        l = time.localtime(latest)
+        ls = time.strftime('%Y-%m-%d-%H%M%S', l)
+        n1 = FakeSymlink(self, 'latest', ls)
         n1.ctime = n1.mtime = date
         self._subs['latest'] = n1
 
@@ -565,18 +519,13 @@ class RefList(Node):
 
     The sub-nodes of the ref list are a series of CommitList for each commit
     hash pointed to by a branch.
-
-    Also, a special sub-node named '.commit' contains all commit directories
-    that are reachable via a ref (e.g. a branch).  See CommitDir for details.
     """
     def __init__(self, parent):
         Node.__init__(self, parent, '/', GIT_MODE_TREE, EMPTY_SHA)
+        self._cache = {}  # hash -> Node
 
     def _mksubs(self):
         self._subs = {}
-
-        commit_dir = CommitDir(self, '.commit')
-        self._subs['.commit'] = commit_dir
 
         tag_dir = TagDir(self, '.tag')
         self._subs['.tag'] = tag_dir
@@ -591,3 +540,9 @@ class RefList(Node):
             n1 = BranchList(self, name, sha)
             n1.ctime = n1.mtime = date
             self._subs[name] = n1
+
+    def get_cached_obj(self, id):
+        return self._cache.get(id)
+
+    def cache_obj(self, id, obj):
+        self._cache[id] = obj
