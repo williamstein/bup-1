@@ -273,7 +273,9 @@ if opt.max_count != None:
 for commit, unixtime, output in loglines:
 
     if opt.changes or not opt.shortstat:
-        print output
+        savename = time.strftime('%Y-%m-%d-%H%M%S',
+                                 time.localtime(float(unixtime)))
+        print savename, output
 
     if opt.shortstat or opt.changes:
         changed_files = get_changed_files(commit)
