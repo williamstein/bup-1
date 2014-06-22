@@ -52,9 +52,9 @@ def cache_get(top, path):
     
 
 class BupFs(fuse.Fuse):
-    def __init__(self, top, meta=False):
+    def __init__(self, meta=False):
         fuse.Fuse.__init__(self)
-        self.top = top
+        self.top = vfs.RefList(None)
         self.meta = meta
     
     def getattr(self, path):
@@ -133,8 +133,7 @@ if len(extra) != 1:
     o.fatal("exactly one argument expected")
 
 git.check_repo_or_die()
-top = vfs.RefList(None)
-f = BupFs(top, meta=opt.meta)
+f = BupFs(meta=opt.meta)
 f.fuse_args.mountpoint = extra[0]
 if opt.debug:
     f.fuse_args.add('debug')
