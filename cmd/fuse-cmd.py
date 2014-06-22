@@ -29,14 +29,14 @@ class Stat(fuse.Stat):
 class BupFs(fuse.Fuse):
     def __init__(self, meta=False):
         fuse.Fuse.__init__(self)
-        self.top = vfs.RefList(None)
+        self._top = vfs.RefList(None)
         self._cache = {}
         self.meta = meta
     
     def _cache_get(self, path):
         cache = self._cache
         parts = path.split('/')
-        cache[('',)] = self.top
+        cache[('',)] = self._top
         c = None
         max = len(parts)
         #log('cache: %r\n' % cache.keys())
