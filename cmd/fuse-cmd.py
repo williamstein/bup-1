@@ -30,13 +30,15 @@ class BupFs(fuse.Fuse):
     def __init__(self, meta=False):
         fuse.Fuse.__init__(self)
         self._top = vfs.RefList(None)
-        self._cache = {}
+        self._cache = {('',) : self._top}
         self.meta = meta
     
     def _cache_get(self, path):
+        if len(self._cache) > 100000:
+            self._top = vfs.RefList(None)
+            self._cache = {('',) : self._top}
         cache = self._cache
         parts = path.split('/')
-        cache[('',)] = self._top
         c = None
         max = len(parts)
         #log('cache: %r\n' % cache.keys())
