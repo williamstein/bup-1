@@ -30,28 +30,31 @@ class BupFs(fuse.Fuse):
     def __init__(self, meta=False):
         fuse.Fuse.__init__(self)
         self._top = vfs.RefList(None)
-        self._cache = {}
+        self._cache = {('',) : self._top}
         self.meta = meta
     
     def _cache_get(self, path):
+        if len(self._cache) > 100000:
+            self._top = vfs.RefList(None)
+            self._cache = {('',) : self._top}
         cache = self._cache
         parts = path.split('/')
-        cache[('',)] = self._top
         c = None
         max = len(parts)
         #log('cache: %r\n' % cache.keys())
         for i in range(max):
-            pre = parts[:max-i]
+            pre = tuple(parts[:max-i])
             #log('cache trying: %r\n' % pre)
-            c = cache.get(tuple(pre))
+            c = cache.get(pre)
             if c:
                 rest = parts[max-i:]
                 for r in rest:
                     #log('resolving %r from %r\n' % (r, c.fullname()))
                     c = c.lresolve(r)
-                    key = tuple(pre + [r])
-                    #log('saving: %r\n' % (key,))
-                    cache[key] = c
+                    c_p = pre + (r,)
+                    #log('saving: %r\n' % (c_p,))
+                    cache[c_p] = c
+                    pre = c_p
                 break
         assert(c)
         return c
