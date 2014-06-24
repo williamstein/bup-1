@@ -196,13 +196,15 @@ class Node(object):
 
     def subs(self):
         """Get a list of nodes that are contained in this node."""
-        if self._subs == None:
+        # Yes, an ugly hack, until we finish refactoring the VFS.
+        if self._subs == None or isinstance(self, BranchList):
             self._mksubs()
         return sorted(self._subs.values())
 
     def sub(self, name):
         """Get node named 'name' that is contained in this node."""
-        if self._subs == None:
+        # Yes, an ugly hack, until we finish refactoring the VFS.
+        if self._subs == None or isinstance(self, BranchList):
             self._mksubs()
         ret = self._subs.get(name)
         if not ret:
@@ -485,8 +487,15 @@ class BranchList(Node):
     """
     def __init__(self, parent, name, hash):
         Node.__init__(self, parent, name, GIT_MODE_TREE, hash)
+        self._tip = None
 
     def _mksubs(self):
+        # FIXME: cannot handle deletions
+        new_tip = readpipe(['git', 'show-ref', '-s', self.name],
+                           preexec_fn=git._gitenv).strip()
+        if self._tip == new_tip:
+            return
+        self.hash = new_tip.decode('hex')
         self._subs = {}
 
         tags = git.tags()
@@ -512,6 +521,7 @@ class BranchList(Node):
         n1 = FakeSymlink(self, 'latest', ls)
         n1.ctime = n1.mtime = date
         self._subs['latest'] = n1
+        self._tip = new_tip
 
 
 class RefList(Node):
