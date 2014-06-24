@@ -51,9 +51,11 @@ class BupFs(fuse.Fuse):
                 for r in rest:
                     #log('resolving %r from %r\n' % (r, c.fullname()))
                     c = c.lresolve(r)
-                    key = tuple(pre + [r])
+                    c_p = pre + [r]
+                    key = tuple(c_p)
                     #log('saving: %r\n' % (key,))
                     cache[key] = c
+                    pre = c_p
                 break
         assert(c)
         return c
