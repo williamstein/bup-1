@@ -56,11 +56,12 @@ result=$(WVPASS ls mnt/src/latest) || exit $?
 WVPASSEQ "$result" "foo
 pre-epoch"
 
-# Right now we don't detect new saves.
+# Make sure we detect new saves.
 WVPASS bup save -n src -d "$savestamp2" --strip src
 result=$(WVPASS ls mnt/src) || exit $?
 savename="$(WVPASS printf '%(%Y-%m-%d-%H%M%S)T' "$savestamp1")" || exit $?
 WVPASSEQ "$result" "$savename1
+$savename2
 latest"
 
 WVPASS fusermount -uz mnt
