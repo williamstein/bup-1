@@ -34,7 +34,7 @@ class BupFs(fuse.Fuse):
         self.meta = meta
     
     def _cache_get(self, path):
-        if len(self._cache) > 100000:
+        if len(self._cache) > 10000:
             self._top = vfs.RefList(None)
             self._cache = {('',) : self._top}
         cache = self._cache
