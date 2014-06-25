@@ -873,7 +873,7 @@ def rev_list(ref, count=None, repo_dir=None):
     # "bup restore", etc.
 
     # Cache the git rev-list in a new directory called cache.
-    REV_CACHE = os.path.join(os.environ['BUP_DIR'], 'cache', 'rev_list')  # must be in here, not global scope so BUP_DIR is set.
+    REV_CACHE = repo('cache/rev_list', repo_dir=repo_dir)
     if not os.path.exists(REV_CACHE):
         os.makedirs(REV_CACHE)
 
