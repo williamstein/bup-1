@@ -32,7 +32,7 @@ class BupFs(fuse.Fuse):
         self._top = vfs.RefList(None)
         self._cache = {('',) : self._top}
         self.meta = meta
-    
+
     def _cache_get(self, path):
         if len(self._cache) > 10000:
             self._top = vfs.RefList(None)
@@ -68,8 +68,8 @@ class BupFs(fuse.Fuse):
             st.st_nlink = node.nlinks()
             st.st_size = node.size()  # Until/unless we store the size in m.
             real_node = path.count('/') > 3
-            if self.meta and real_node:
-                m = node.metadata()
+            if real_node:
+                m = self.meta if self.meta else node.metadata()
                 if m:
                     st.st_mode = m.mode
                     st.st_uid = opt.uid if opt.uid is not None else m.uid
