@@ -79,15 +79,16 @@ WVPASS grep -qE "^uid: $other_uid\$" foo-xstat
 WVPASS grep -qE "^group: $other_group\$" foo-xstat
 WVPASS grep -qE "^gid: $other_gid\$" foo-xstat
 
-has_gid_0="$(WVPASS python -c "
-import grp
+has_uid_gid_0="$(WVPASS python -c "
+import grp, pwd
 try:
+  pwd.getpwpid(0)
   grp.getgrgid(0)
   print 'yes'
 except KeyError, ex:
   pass
 ") 2>/dev/null" || exit $?
-if [ "$has_gid_0" == yes ]
+if [ "$has_uid_gid_0" == yes ]
 then
     WVSTART "restore --map-user/group/uid/gid (zero uid/gid trumps all)"
     WVPASS rm -rf dest
