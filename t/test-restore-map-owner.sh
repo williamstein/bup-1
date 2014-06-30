@@ -87,7 +87,7 @@ try:
 except KeyError, ex:
   pass
 ") 2>/dev/null" || exit $?
-if [ $has_gid_0 == yes ]
+if [ "$has_gid_0" == yes ]
 then
     WVSTART "restore --map-user/group/uid/gid (zero uid/gid trumps all)"
     WVPASS rm -rf dest
