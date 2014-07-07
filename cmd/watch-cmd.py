@@ -218,6 +218,7 @@ def update_watcher(path, excluded_paths, exclude_rxs):
             }
 
     mask = reduce(lambda x, y: x | y, flag_set)
+    submask = mask | inotify.IN_ONLYDIR
     create_mask = inotify.IN_CREATE | inotify.IN_MOVED_TO
     delete_mask = inotify.IN_DELETE | inotify.IN_MOVED_FROM
 
@@ -226,15 +227,34 @@ def update_watcher(path, excluded_paths, exclude_rxs):
         filters.add(lambda path: path not in excluded_paths)
     if exclude_rxs:
         filters.add(lambda path: not should_rx_exclude_path(path, exclude_rxs))
+    if opt.xdev:
+        xdevs = []
+        for realpath, path in paths:
+            xdevs.append((realpath, drecurse.OsFile(path).stat().st_dev))
+        def xdev_check(path):
+            try:
+                path = os.path.realpath(path)
+                st = drecurse.OsFile(os.path.realpath(path)).stat()
+                if stat.S_ISDIR(st.st_mode):
+                    path += os.sep
+                xdev = st.st_dev
+                return any(path.startswith(dpath) and xdev == dxdev for dpath, dxdev in xdevs)
+            except OSError as err:
+                # race condition
+                if err.errno == err.ENOENT:
+                    return False
+        filters.add(xdev_check)
 
-    addfilter = None
-    if filters:
-        def addfilter(event):
-            return all(filter(event.fullpath) for filter in filters)
+    def addfilter(path):
+        return all(filter(path) for filter in filters)
 
-    watcher = inotify.watcher.AutoWatcher(addfilter=addfilter)
+    watcher = inotify.watcher.AutoWatcher(addfilter=lambda event: addfilter(event.fullpath))
     for realpath, path in paths:
-        watcher.add_all(realpath, mask)
+        for root, dirs, names in os.walk(realpath, topdown=False):
+            for d in dirs:
+                d = os.path.join(root, d)
+                if addfilter(d):
+                    watcher.add(d, submask)
 
     if not watcher.watches():
         print('No files to watch')
@@ -345,23 +365,24 @@ optspec = """
 bup watch <--start|stop|restart> [-p pidfile] <filenames...>
 --
  Modes:
-start               start daemon
-stop                stop daemon
-restart             restart daemon (default)
+start                   start daemon
+stop                    stop daemon
+restart                 restart daemon (default)
  Options:
-no-detach           don't detach process from shell (i.e. don't run as a deamon)
-p,pidfile=          pidfile for daemon (required)
-l,logfile=          logfile for daemon (default: no log)
-buffer-time=        time (in ms) to buffer IO changes (default: 1 second)
-buffer-size=        size (in bytes) of the buffer (default: 4kB)
-save-interval=      time (in multiples of the buffer time) between saves to the bupindex
-no-check-device     don't invalidate an entry if the containing device changes
-f,indexfile=        the name of the index file (normally BUP_DIR/bupindex)
-exclude=            a path to exclude from the backup (may be repeated)
-exclude-from=       skip --exclude paths in file (may be repeated)
-exclude-rx=         skip paths matching the unanchored regex (may be repeated)
-exclude-rx-from=    skip --exclude-rx patterns in file (may be repeated)
-v,verbose           increase log output (can be used more than once)
+no-detach               don't detach process from shell (i.e. don't run as a deamon)
+p,pidfile=              pidfile for daemon (required)
+l,logfile=              logfile for daemon (default: no log)
+buffer-time=            time (in ms) to buffer IO changes (default: 1 second)
+buffer-size=            size (in bytes) of the buffer (default: 4kB)
+save-interval=          time (in multiples of the buffer time) between saves to the bupindex
+no-check-device         don't invalidate an entry if the containing device changes
+f,indexfile=            the name of the index file (normally BUP_DIR/bupindex)
+exclude=                a path to exclude from the backup (may be repeated)
+exclude-from=           skip --exclude paths in file (may be repeated)
+exclude-rx=             skip paths matching the unanchored regex (may be repeated)
+exclude-rx-from=        skip --exclude-rx patterns in file (may be repeated)
+v,verbose               increase log output (can be used more than once)
+x,xdev,one-file-system  don't cross filesystem boundaries
 """
 o = options.Options(optspec)
 (opt, flags, extra) = o.parse(sys.argv[1:])
