@@ -1,7 +1,97 @@
 #!/usr/bin/env python
+
 from bup import metadata, index, drecurse, options, git, hlinkdb
 from bup.helpers import *
-import sys, time
+import atexit, os, signal, sys, time
+
+# the following deamonize code is based on
+# http://www.jejik.com/articles/2007/02/a_simple_unix_linux_daemon_in_python/
+# with some slight modifications from some other implementations
+def daemonize():
+    """do the UNIX double-fork magic"""
+    try:
+        pid = os.fork()
+        if pid > 0:
+            # exit first parent
+            sys.exit()
+    except OSError as err:
+        message = 'fork #1 failed: {0}'
+        sys.exit(message.format(err))
+
+    # decouple from parent environment
+    os.chdir(os.sep)
+    os.setsid()
+    os.umask(0)
+
+    # do second fork
+    try:
+        pid = os.fork()
+        if pid > 0:
+            # exit from second parent
+            sys.exit()
+    except OSError as err:
+        message = 'fork #2 failed: {0}'
+        sys.exit(message.format(err))
+
+    # redirect standard file descriptors
+    sys.stdout.flush()
+    sys.stderr.flush()
+    si = open(os.devnull, 'r')
+    so = open(opt.logfile, 'a+')
+    se = open(opt.logfile, 'a+')
+
+    os.dup2(si.fileno(), sys.stdin.fileno())
+    os.dup2(so.fileno(), sys.stdout.fileno())
+    os.dup2(se.fileno(), sys.stderr.fileno())
+
+    # make SIGTERM do a normal (proper) exit
+    signal.signal(signal.SIGTERM, lambda signum, stack_frame: sys.exit())
+
+    # setup for pidfile removal
+    atexit.register(os.remove, opt.pidfile)
+    # write pidfile
+    with open(opt.pidfile, 'w+') as f:
+        f.write(str(os.getpid()))
+
+def check_pidfile():
+    """check for the pidfile to see if the daemon is already running"""
+    try:
+        with open(opt.pidfile, 'r') as pf:
+            pid = int(pf.read())
+    except IOError:
+        return # no pid file
+    except ValueError:
+        message = 'pidfile {0} contains non-numeric value'
+        sys.exit(message.format(opt.pidfile))
+    else:
+        message = 'pidfile {0} already exist'
+        sys.exit(message.format(opt.pidfile))
+
+def kill_daemon(restart=False):
+    """kill the daemon associated to the pidfile"""
+    # get the pid from the pidfile
+    try:
+        with open(opt.pidfile, 'r') as pf:
+            pid = int(pf.read())
+    except IOError:
+        if restart:
+            return
+        message = 'pidfile {0} does not exist'
+        sys.exit(message.format(opt.pidfile))
+    except ValueError:
+        message = 'pidfile {0} contains non-numeric value'
+        sys.exit(message.format(opt.pidfile))
+
+    # try killing the daemon process
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as err:
+        if err.errno == ernno.ESRCH:
+            message = 'Removing stale pidfile {0}'
+            print(message.format(opt.pidfile))
+            os.remove(opt.pidfile)
+        else:
+            sys.exit(err)
 
 _ri = None
 _msw = None
@@ -141,10 +231,11 @@ def update_watcher(path, excluded_paths, exclude_rxs):
             return all(filter(event.fullpath) for filter in filters)
 
     watcher = inotify.watcher.AutoWatcher(addfilter=addfilter)
-    watcher.add_all(path, mask)
+    for realpath, path in paths:
+        watcher.add_all(realpath, mask)
 
     if not watcher.watches():
-        qprogress('No files to watch\n')
+        print('No files to watch')
         return
 
     poll = select.poll()
@@ -231,6 +322,9 @@ bup watch [options...] <filenames...>
 --
  Options:
 no-check-device don't invalidate an entry if the containing device changes
+d,daemonize detach process from shell (requires the pidfile to be specified)
+p,pidfile= pidfile for daemon
+l,logfile= logfile for daemon (default: no log)
 f,indexfile=  the name of the index file (normally BUP_DIR/bupindex)
 exclude= a path to exclude from the backup (may be repeated)
 exclude-from= skip --exclude paths in file (may be repeated)
@@ -259,5 +353,18 @@ paths = index.reduce_paths(extra)
 
 if not extra:
     o.fatal('watch requested but no paths given')
-for (rp,path) in paths:
-    update_watcher(rp, excluded_paths, exclude_rxs)
+
+if opt.logfile:
+    opt.logfile = os.path.realpath(opt.logfile)
+else:
+    opt.logfile = os.devnull
+
+if opt.daemonize:
+    if opt.pidfile:
+        opt.pidfile = os.path.realpath(opt.pidfile)
+    else:
+        o.fatal('daemon requested but no pidfile specified')
+    check_pidfile()
+    daemonize()
+
+update_watcher(paths, excluded_paths, exclude_rxs)
