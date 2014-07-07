@@ -136,6 +136,9 @@ def get_current(path):
         return None
 
 def remove_path_from_index(path):
+    if opt.verbose >= 2:
+        print('removing {0} from the index'.format(path))
+
     cur = get_current(path)
 
     if cur is None or cur.is_deleted():
@@ -149,55 +152,54 @@ def remove_path_from_index(path):
         _hlinks.del_path(cur.name)
 
 def update_path_in_index(path, tstart):
+    if opt.verbose >= 2:
+        print('updating {0} in the index'.format(path))
+
     cur = get_current(path)
 
     if cur is None:
         # seems to be missing in the index, so add it
-        add_path_to_index(path)
+        return add_path_to_index(path)
 
-    try:
-        pst = drecurse.OsFile(path).stat()
+    pst = drecurse.OsFile(path).stat()
 
-        meta = metadata.from_path(path, statinfo=pst)
-        if not stat.S_ISDIR(cur.mode) and cur.nlink > 1:
-            _hlinks.del_path(cur.name)
-        if not stat.S_ISDIR(pst.st_mode) and pst.st_nlink > 1:
-            _hlinks.add_path(path, pst.st_dev, pst.st_ino)
-        # Clear these so they don't bloat the store -- they're
-        # already in the index (since they vary a lot and they're
-        # fixed length).  If you've noticed "tmax", you might
-        # wonder why it's OK to do this, since that code may
-        # adjust (mangle) the index mtime and ctime -- producing
-        # fake values which must not end up in a .bupm.  However,
-        # it looks like that shouldn't be possible:  (1) When
-        # "save" validates the index entry, it always reads the
-        # metadata from the filesytem. (2) Metadata is only
-        # read/used from the index if hashvalid is true. (3) index
-        # always invalidates "faked" entries, because "old != new"
-        # in from_stat().
-        meta.ctime = meta.mtime = meta.atime = 0
-        meta_ofs = _msw.store(meta)
-        cur.from_stat(pst, meta_ofs, tstart,
-                          check_device=opt.check_device)
-        cur.repack()
-    except (OSError, IOError) as e:
-        add_error(e)
+    meta = metadata.from_path(path, statinfo=pst)
+    if not stat.S_ISDIR(cur.mode) and cur.nlink > 1:
+        _hlinks.del_path(cur.name)
+    if not stat.S_ISDIR(pst.st_mode) and pst.st_nlink > 1:
+        _hlinks.add_path(path, pst.st_dev, pst.st_ino)
+    # Clear these so they don't bloat the store -- they're
+    # already in the index (since they vary a lot and they're
+    # fixed length).  If you've noticed "tmax", you might
+    # wonder why it's OK to do this, since that code may
+    # adjust (mangle) the index mtime and ctime -- producing
+    # fake values which must not end up in a .bupm.  However,
+    # it looks like that shouldn't be possible:  (1) When
+    # "save" validates the index entry, it always reads the
+    # metadata from the filesytem. (2) Metadata is only
+    # read/used from the index if hashvalid is true. (3) index
+    # always invalidates "faked" entries, because "old != new"
+    # in from_stat().
+    meta.ctime = meta.mtime = meta.atime = 0
+    meta_ofs = _msw.store(meta)
+    cur.from_stat(pst, meta_ofs, tstart,
+                      check_device=opt.check_device)
+    cur.repack()
 
 def add_path_to_index(path):
-    try:
-        pst = drecurse.OsFile(path).stat()
+    if opt.verbose >= 2:
+        print('adding {0} to the index'.format(path))
 
-        meta = metadata.from_path(path, statinfo=pst)
+    pst = drecurse.OsFile(path).stat()
 
-        # See same assignment to 0, above, for rationale.
-        meta.atime = meta.mtime = meta.ctime = 0
-        meta_ofs = _msw.store(meta)
-        _wi.add(path, pst, meta_ofs)
-        if not stat.S_ISDIR(pst.st_mode) and pst.st_nlink > 1:
-            _hlinks.add_path(path, pst.st_dev, pst.st_ino)
+    meta = metadata.from_path(path, statinfo=pst)
 
-    except (OSError, IOError) as e:
-        add_error(e)
+    # See same assignment to 0, above, for rationale.
+    meta.atime = meta.mtime = meta.ctime = 0
+    meta_ofs = _msw.store(meta)
+    _wi.add(path, pst, meta_ofs)
+    if not stat.S_ISDIR(pst.st_mode) and pst.st_nlink > 1:
+        _hlinks.add_path(path, pst.st_dev, pst.st_ino)
 
 def update_watcher(path, excluded_paths, exclude_rxs):
     """
@@ -245,12 +247,7 @@ def update_watcher(path, excluded_paths, exclude_rxs):
 
     threshold = inotify.watcher.Threshold(
             watcher,
-            # read the watcher with every 256kB of inotify data
-            # it is set this high reduce index merging during
-            # IO-intensive tasks like compilation
-
-            # TODO: make this configurable with an option for bup-watch
-            256*1024,
+            opt.buffer_size,
             )
 
     def drecurse_cmp(left, right):
@@ -264,11 +261,15 @@ def update_watcher(path, excluded_paths, exclude_rxs):
         else:
             return cmp(right, left)
 
+    last_save = (time.time() - 1) * 10**9
+    tdict = dict()
+    read = False
+    made_changes = False
+    save_interval = opt.save_interval * opt.buffer_time * 10**6
+    setup_globals(last_save)
+
     while True:
         events = poll.poll(timeout)
-
-        read = False
-        tdict = dict()
 
         if threshold() or not events:
 
@@ -276,60 +277,91 @@ def update_watcher(path, excluded_paths, exclude_rxs):
             tstart = int(time.time()) * 10**9
 
             for event in watcher.read(False):
-                read = True
                 path = event.fullpath
-                if event.mask & inotify.IN_ISDIR:
-                    # bup internals expect a trailing slash for directories
-                    path += os.sep
-                flag = event.mask & mask # should have unique flag
-                old_flag = tdict.get(path)
-                if old_flag is not None:
+                if path is None:
+                    continue
+                read = True
+                cur_mask = event.mask & mask
+                old_mask = tdict.get(path, (None,))[0]
+                if old_mask is not None:
                     # some special rules for overwriting flags
-                    if old_flag & create_mask:
-                        if flag & inotify.IN_MODIFY:
+                    if old_mask & create_mask:
+                        if cur_mask & inotify.IN_MODIFY:
                             continue
-                        elif flag & delete_mask:
+                        elif cur_mask & delete_mask:
                             del tdict[path]
                             continue
-                    elif old_flag & delete_mask and flag & create_mask:
-                        tdict[path] = inotify.IN_MODIFY
-                        continue
-                tdict[path] = flag
+                    elif old_mask & delete_mask and cur_mask & create_mask:
+                        cur_mask = (cur_mask & ~create_mask) | inotify.IN_MODIFY
+                tdict[path] = (cur_mask, tmax)
 
+            new_tdict = dict()
             if tdict: # if nothing changed, don't do anything
-                setup_globals(tmax)
-                for path, flag in sorted(tdict.items(), drecurse_cmp):
-                    if flag & create_mask:
-                        add_path_to_index(path)
-                    elif flag & delete_mask:
-                        remove_path_from_index(path)
+                made_changes = True
+                for path, (mask, etime) in sorted(tdict.items(), drecurse_cmp):
+                    if mask & inotify.IN_ISDIR:
+                        # bup internals expect a trailing slash for directories
+                        bup_path += os.sep
                     else:
-                        update_path_in_index(path, tstart)
+                        bup_path = path
+
+                    try:
+                        if mask & create_mask:
+                            add_path_to_index(bup_path)
+                        elif mask & delete_mask:
+                            remove_path_from_index(bup_path)
+                        else:
+                            update_path_in_index(bup_path, tmax)
+                    except (OSError, IOError, Exception) as err:
+                        # these are for race conditions
+                        #  - OSError and IOError should be obvious
+                        #  - the blanket Exception is for some concurency
+                        #    issues in the bupindex code
+                        if etime + save_interval < tmax:
+                            # if it takes too long to resolve a supposed
+                            # race condition, it is probably a real error
+                            add_error(err)
+                        else:
+                            new_tdict[path] = (mask, etime)
+            tdict = new_tdict
+
+            if last_save + save_interval < tmax and made_changes:
                 save_index(tmax)
+                made_changes = False
+                setup_globals(tmax)
+                last_save = time.time() * 10**9
 
         if read:
+            read = False
             timeout = None
             poll.register(watcher, select.POLLIN)
         else:
-            # only merge every 10 seconds (unless you go over the data threshold)
-            # TODO: make this configurable with an option
-            timeout = 10000
+            # record changes at most every buffer_time
+            timeout = opt.buffer_time
             poll.unregister(watcher)
 
 
 optspec = """
-bup watch [options...] <filenames...>
+bup watch <--start|stop|restart> [-p pidfile] <filenames...>
 --
+ Modes:
+start               start daemon
+stop                stop daemon
+restart             restart daemon (default)
  Options:
-no-check-device don't invalidate an entry if the containing device changes
-d,daemonize detach process from shell (requires the pidfile to be specified)
-p,pidfile= pidfile for daemon
-l,logfile= logfile for daemon (default: no log)
-f,indexfile=  the name of the index file (normally BUP_DIR/bupindex)
-exclude= a path to exclude from the backup (may be repeated)
-exclude-from= skip --exclude paths in file (may be repeated)
-exclude-rx= skip paths matching the unanchored regex (may be repeated)
-exclude-rx-from= skip --exclude-rx patterns in file (may be repeated)
+no-detach           don't detach process from shell (i.e. don't run as a deamon)
+p,pidfile=          pidfile for daemon (required)
+l,logfile=          logfile for daemon (default: no log)
+buffer-time=        time (in ms) to buffer IO changes (default: 1 second)
+buffer-size=        size (in bytes) of the buffer (default: 4kB)
+save-interval=      time (in multiples of the buffer time) between saves to the bupindex
+no-check-device     don't invalidate an entry if the containing device changes
+f,indexfile=        the name of the index file (normally BUP_DIR/bupindex)
+exclude=            a path to exclude from the backup (may be repeated)
+exclude-from=       skip --exclude paths in file (may be repeated)
+exclude-rx=         skip paths matching the unanchored regex (may be repeated)
+exclude-rx-from=    skip --exclude-rx patterns in file (may be repeated)
+v,verbose           increase log output (can be used more than once)
 """
 o = options.Options(optspec)
 (opt, flags, extra) = o.parse(sys.argv[1:])
@@ -347,10 +379,6 @@ indexfile = opt.indexfile or git.repo('bupindex')
 
 handle_ctrl_c()
 
-excluded_paths = parse_excludes(flags, o.fatal)
-exclude_rxs = parse_rx_excludes(flags, o.fatal)
-paths = index.reduce_paths(extra)
-
 if not extra:
     o.fatal('watch requested but no paths given')
 
@@ -359,12 +387,37 @@ if opt.logfile:
 else:
     opt.logfile = os.devnull
 
-if opt.daemonize:
+if not (opt.start or opt.stop or opt.restart):
+    opt.restart = True
+
+if opt.restart:
+    opt.start = opt.stop = opt.restart
+
+if opt.detach:
     if opt.pidfile:
         opt.pidfile = os.path.realpath(opt.pidfile)
     else:
         o.fatal('daemon requested but no pidfile specified')
-    check_pidfile()
-    daemonize()
+
+    if opt.stop:
+        kill_daemon(opt.restart)
+
+    if opt.start:
+        check_pidfile()
+        daemonize()
+    else:
+        sys.exit()
+
+excluded_paths = parse_excludes(flags, o.fatal)
+exclude_rxs = parse_rx_excludes(flags, o.fatal)
+paths = index.reduce_paths(extra)
+
+
+if not opt.buffer_size:
+    opt.buffer_size = 4*1024
+if not opt.buffer_time:
+    opt.buffer_time = 1000
+if not opt.save_interval:
+    opt.save_interval = 60
 
 update_watcher(paths, excluded_paths, exclude_rxs)
