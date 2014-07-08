@@ -241,7 +241,7 @@ def update_watcher(path, excluded_paths, exclude_rxs):
                 return any(path.startswith(dpath) and xdev == dxdev for dpath, dxdev in xdevs)
             except OSError as err:
                 # race condition
-                if err.errno == err.ENOENT:
+                if err.errno == errno.ENOENT:
                     return False
         filters.add(xdev_check)
 
@@ -249,13 +249,18 @@ def update_watcher(path, excluded_paths, exclude_rxs):
         return all(filter(path) for filter in filters)
 
     watcher = inotify.watcher.AutoWatcher(addfilter=lambda event: addfilter(event.fullpath))
+
+    def recursive_add_to_watcher(base):
+        try:
+            for path in (os.path.join(base, path) for path in os.listdir(base)):
+                if os.path.isdir(path) and not os.path.islink(path) and addfilter(path):
+                    recursive_add_to_watcher(path)
+        except OSError:
+            return
+        watcher.add(base, submask)
+
     for realpath, path in paths:
-        for root, dirs, names in os.walk(realpath, topdown=False):
-            for d in dirs:
-                d = os.path.join(root, d)
-                if addfilter(d):
-                    watcher.add(d, submask)
-        watcher.add(realpath, submask)
+        recursive_add_to_watcher(realpath)
 
     if not watcher.watches():
         print('No files to watch')
@@ -282,25 +287,27 @@ def update_watcher(path, excluded_paths, exclude_rxs):
         else:
             return cmp(right, left)
 
-    last_save = (time.time() - 1) * 10**9
-    tdict = dict()
-    read = False
-    made_changes = False
     save_interval = opt.save_interval * opt.buffer_time * 10**6
-    setup_globals(last_save)
+
+    read = False
+    tdict = dict()
+
+    made_changes = False
+    tmax = (time.time() - 1) * 10**9
+    setup_globals(tmax)
 
     while True:
         events = poll.poll(timeout)
 
         if threshold() or not events:
 
-            tmax = (time.time() - 1) * 10**9
             tstart = int(time.time()) * 10**9
 
             for event in watcher.read(False):
                 path = event.fullpath
                 if path is None:
                     continue
+                path = os.path.realpath(path)
                 read = True
                 cur_mask = event.mask & mask
                 old_mask = tdict.get(path, (None,))[0]
@@ -314,12 +321,15 @@ def update_watcher(path, excluded_paths, exclude_rxs):
                             continue
                     elif old_mask & delete_mask and cur_mask & create_mask:
                         cur_mask = (cur_mask & ~create_mask) | inotify.IN_MODIFY
-                tdict[path] = (cur_mask, tmax)
+                tdict[path] = (cur_mask, tstart)
 
-            new_tdict = dict()
             if tdict: # if nothing changed, don't do anything
                 made_changes = True
+                new_tdict = dict()
                 for path, (mask, etime) in sorted(tdict.items(), drecurse_cmp):
+                    if not addfilter(path):
+                        continue
+
                     if mask & inotify.IN_ISDIR:
                         # bup internals expect a trailing slash for directories
                         bup_path += os.sep
@@ -344,13 +354,14 @@ def update_watcher(path, excluded_paths, exclude_rxs):
                             add_error(err)
                         else:
                             new_tdict[path] = (mask, etime)
-            tdict = new_tdict
+                tdict = new_tdict
 
-            if last_save + save_interval < tmax and made_changes:
+            if tmax + save_interval < tstart and made_changes:
                 save_index(tmax)
+
                 made_changes = False
+                tmax = (time.time()-1) * 10**9
                 setup_globals(tmax)
-                last_save = time.time() * 10**9
 
         if read:
             read = False
