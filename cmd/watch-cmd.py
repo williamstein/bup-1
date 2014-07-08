@@ -412,9 +412,6 @@ indexfile = opt.indexfile or git.repo('bupindex')
 
 handle_ctrl_c()
 
-if not extra:
-    o.fatal('watch requested but no paths given')
-
 if opt.logfile:
     opt.logfile = os.path.realpath(opt.logfile)
 else:
@@ -441,10 +438,12 @@ if opt.detach:
     else:
         sys.exit()
 
+if not extra:
+    o.fatal('watch requested but no paths given')
+
 excluded_paths = parse_excludes(flags, o.fatal)
 exclude_rxs = parse_rx_excludes(flags, o.fatal)
 paths = index.reduce_paths(extra)
-
 
 if not opt.buffer_size:
     opt.buffer_size = 4*1024
