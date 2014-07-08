@@ -106,6 +106,8 @@ def setup_globals(tmax):
     _hlinks = hlinkdb.HLinkDB(indexfile+'.hlink')
 
 def save_index(tmax):
+    print('saving index')
+
     _hlinks.prepare_save()
 
     if _ri.exists():
@@ -290,6 +292,48 @@ def update_watcher(path, excluded_paths, exclude_rxs):
     read = False
     tdict = dict()
 
+    def record_changes():
+        if tdict: # if nothing changed, don't do anything
+            new_tdict = dict()
+            setup_globals(tmax)
+
+            for path, (mask, etime) in sorted(tdict.items(), drecurse_cmp):
+                if not addfilter(path):
+                    continue
+
+                if mask & inotify.IN_ISDIR:
+                    # bup internals expect a trailing slash for directories
+                    bup_path += os.sep
+                else:
+                    bup_path = path
+
+                try:
+                    if mask & create_mask:
+                        add_path_to_index(bup_path)
+                    elif mask & delete_mask:
+                        remove_path_from_index(bup_path)
+                    else:
+                        update_path_in_index(bup_path, tmax)
+                except (OSError, IOError, Exception) as err:
+                    # these are for race conditions
+                    #  - OSError and IOError should be obvious
+                    #  - the blanket Exception is for some concurency
+                    #    issues in the bupindex code
+                    if etime +  60*10**9 <= tstart:
+                        # if it takes too long to resolve a supposed
+                        # race condition, it is probably a real error
+                        add_error(err)
+                    else:
+                        new_tdict[path] = (mask, etime)
+
+            save_index(tmax)
+
+            return new_tdict
+        else:
+            return tdict
+
+    atexit.register(record_changes)
+
     while True:
         events = poll.poll(timeout)
 
@@ -310,7 +354,7 @@ def update_watcher(path, excluded_paths, exclude_rxs):
                     # some special rules for overwriting flags
                     if old_mask & create_mask:
                         if cur_mask & inotify.IN_MODIFY:
-                            continue
+                            cur_mask = (cur_mask & ~inotify.IN_MODIFY) | (old_mask & create_mask)
                         elif cur_mask & delete_mask:
                             del tdict[path]
                             continue
@@ -318,41 +362,7 @@ def update_watcher(path, excluded_paths, exclude_rxs):
                         cur_mask = (cur_mask & ~create_mask) | inotify.IN_MODIFY
                 tdict[path] = (cur_mask, tstart)
 
-            if tdict: # if nothing changed, don't do anything
-                new_tdict = dict()
-                setup_globals(tmax)
-                for path, (mask, etime) in sorted(tdict.items(), drecurse_cmp):
-                    if not addfilter(path):
-                        continue
-
-                    if mask & inotify.IN_ISDIR:
-                        # bup internals expect a trailing slash for directories
-                        bup_path += os.sep
-                    else:
-                        bup_path = path
-
-                    try:
-                        if mask & create_mask:
-                            add_path_to_index(bup_path)
-                        elif mask & delete_mask:
-                            remove_path_from_index(bup_path)
-                        else:
-                            update_path_in_index(bup_path, tmax)
-                    except (OSError, IOError, Exception) as err:
-                        # these are for race conditions
-                        #  - OSError and IOError should be obvious
-                        #  - the blanket Exception is for some concurency
-                        #    issues in the bupindex code
-                        if etime +  60*10**9 <= tstart:
-                            # if it takes too long to resolve a supposed
-                            # race condition, it is probably a real error
-                            add_error(err)
-                        else:
-                            new_tdict[path] = (mask, etime)
-
-                tdict = new_tdict
-                save_index(tmax)
-
+            record_changes()
         if read:
             read = False
             timeout = None
