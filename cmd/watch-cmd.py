@@ -287,28 +287,23 @@ def update_watcher(path, excluded_paths, exclude_rxs):
         else:
             return cmp(right, left)
 
-    save_interval = opt.save_interval * opt.buffer_time * 10**6
-
     read = False
     tdict = dict()
-
-    made_changes = False
-    tmax = (time.time() - 1) * 10**9
-    setup_globals(tmax)
 
     while True:
         events = poll.poll(timeout)
 
         if threshold() or not events:
 
+            tmax = (time.time() - 1) * 10**9
             tstart = int(time.time()) * 10**9
 
             for event in watcher.read(False):
                 path = event.fullpath
                 if path is None:
                     continue
-                path = os.path.realpath(path)
                 read = True
+                path = os.path.realpath(path)
                 cur_mask = event.mask & mask
                 old_mask = tdict.get(path, (None,))[0]
                 if old_mask is not None:
@@ -324,8 +319,8 @@ def update_watcher(path, excluded_paths, exclude_rxs):
                 tdict[path] = (cur_mask, tstart)
 
             if tdict: # if nothing changed, don't do anything
-                made_changes = True
                 new_tdict = dict()
+                setup_globals(tmax)
                 for path, (mask, etime) in sorted(tdict.items(), drecurse_cmp):
                     if not addfilter(path):
                         continue
@@ -348,20 +343,15 @@ def update_watcher(path, excluded_paths, exclude_rxs):
                         #  - OSError and IOError should be obvious
                         #  - the blanket Exception is for some concurency
                         #    issues in the bupindex code
-                        if etime + save_interval < tmax:
+                        if etime +  60*10**9 <= tstart:
                             # if it takes too long to resolve a supposed
                             # race condition, it is probably a real error
                             add_error(err)
                         else:
                             new_tdict[path] = (mask, etime)
+
                 tdict = new_tdict
-
-            if tmax + save_interval < tstart and made_changes:
                 save_index(tmax)
-
-                made_changes = False
-                tmax = (time.time()-1) * 10**9
-                setup_globals(tmax)
 
         if read:
             read = False
@@ -369,7 +359,7 @@ def update_watcher(path, excluded_paths, exclude_rxs):
             poll.register(watcher, select.POLLIN)
         else:
             # record changes at most every buffer_time
-            timeout = opt.buffer_time
+            timeout = opt.save_interval
             poll.unregister(watcher)
 
 
@@ -384,9 +374,8 @@ restart                 restart daemon (default)
 no-detach               don't detach process from shell (i.e. don't run as a deamon)
 p,pidfile=              pidfile for daemon (required)
 l,logfile=              logfile for daemon (default: no log)
-buffer-time=            time (in ms) to buffer IO changes (default: 1 second)
-buffer-size=            size (in bytes) of the buffer (default: 4kB)
-save-interval=          time (in multiples of the buffer time) between saves to the bupindex
+buffer-size=            size (in bytes) of the buffer (default: 32kB)
+save-interval=          time (in ms) between saves to the bupindex (default: 10s)
 no-check-device         don't invalidate an entry if the containing device changes
 f,indexfile=            the name of the index file (normally BUP_DIR/bupindex)
 exclude=                a path to exclude from the backup (may be repeated)
@@ -446,10 +435,8 @@ exclude_rxs = parse_rx_excludes(flags, o.fatal)
 paths = index.reduce_paths(extra)
 
 if not opt.buffer_size:
-    opt.buffer_size = 4*1024
-if not opt.buffer_time:
-    opt.buffer_time = 1000
+    opt.buffer_size = 32*1024
 if not opt.save_interval:
-    opt.save_interval = 60
+    opt.save_interval = 10000
 
 update_watcher(paths, excluded_paths, exclude_rxs)
