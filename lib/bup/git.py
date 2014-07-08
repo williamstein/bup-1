@@ -2,8 +2,10 @@
 bup repositories are in Git format. This library allows us to
 interact with the Git data structures.
 """
+import cPickle as pickle;
 import os, sys, zlib, time, subprocess, struct, stat, re, tempfile, glob
 from collections import namedtuple
+from itertools import islice
 
 from bup.helpers import *
 from bup import _helpers, path, midx, bloom, xstat
@@ -86,18 +88,29 @@ def get_commit_items(id, cp):
     return parse_commit(commit_content)
 
 
-def repo(sub = ''):
+def _local_git_date_str(epoch_sec):
+    return '%d %s' % (epoch_sec, time.strftime('%z', time.localtime(epoch_sec)))
+
+
+def _git_date_str(epoch_sec, tz_offset_min):
+    off =  tz_offset_min
+    return '%d %s%d%d' \
+        % (epoch_sec, '+' if off >= 0 else '-', abs(off) / 60, abs(off) % 60)
+
+
+def repo(sub = '', repo_dir=None):
     """Get the path to the git repository or one of its subdirectories."""
     global repodir
-    if not repodir:
+    repo_dir = repo_dir or repodir
+    if not repo_dir:
         raise GitError('You should call check_repo_or_die()')
 
     # If there's a .git subdirectory, then the actual repo is in there.
-    gd = os.path.join(repodir, '.git')
+    gd = os.path.join(repo_dir, '.git')
     if os.path.exists(gd):
         repodir = gd
 
-    return os.path.join(repodir, sub)
+    return os.path.join(repo_dir, sub)
 
 
 def shorten_hash(s):
@@ -633,13 +646,17 @@ class PackWriter:
         self._require_objcache()
         return self.objcache.exists(id, want_source=want_source)
 
+    def write(self, sha, type, content):
+        """Write an object to the pack file.  Fails if sha exists()."""
+        self._write(sha, type, content)
+        self._require_objcache()
+        self.objcache.add(sha)
+
     def maybe_write(self, type, content):
         """Write an object to the pack file if not present and return its id."""
         sha = calc_hash(type, content)
         if not self.exists(sha):
-            self._write(sha, type, content)
-            self._require_objcache()
-            self.objcache.add(sha)
+            self.write(sha, type, content)
         return sha
 
     def new_blob(self, blob):
@@ -651,23 +668,28 @@ class PackWriter:
         content = tree_encode(shalist)
         return self.maybe_write('tree', content)
 
-    def _new_commit(self, tree, parent, author, adate, committer, cdate, msg):
+    def new_commit(self, tree, parent,
+                   author, adate_sec, adate_tz,
+                   committer, cdate_sec, cdate_tz,
+                   msg):
+        """Create a commit object in the pack.  The date_sec values must be
+        epoch-seconds, and if a tz is None, the local timezone is assumed."""
+        if adate_tz:
+            adate_str = _git_date_str(adate_sec, adate_tz)
+        else:
+            adate_str = _local_git_date_str(adate_sec)
+        if cdate_tz:
+            cdate_str = _git_date_str(cdate_sec, cdate_tz)
+        else:
+            cdate_str = _local_git_date_str(cdate_sec)
         l = []
         if tree: l.append('tree %s' % tree.encode('hex'))
         if parent: l.append('parent %s' % parent.encode('hex'))
-        if author: l.append('author %s %s' % (author, _git_date(adate)))
-        if committer: l.append('committer %s %s' % (committer, _git_date(cdate)))
+        if author: l.append('author %s %s' % (author, adate_str))
+        if committer: l.append('committer %s %s' % (committer, cdate_str))
         l.append('')
         l.append(msg)
         return self.maybe_write('commit', '\n'.join(l))
-
-    def new_commit(self, parent, tree, date, msg):
-        """Create a commit object in the pack."""
-        userline = '%s <%s@%s>' % (userfullname(), username(), hostname())
-        commit = self._new_commit(tree, parent,
-                                  userline, date, userline, date,
-                                  msg)
-        return commit
 
     def abort(self):
         """Remove the pack file from disk."""
@@ -759,22 +781,34 @@ class PackWriter:
             idx_f.close()
 
 
-def _git_date(date):
-    return '%d %s' % (date, time.strftime('%z', time.localtime(date)))
+def _gitenv(repo_dir = None):
+    if not repo_dir:
+        repo_dir = repo()
+    def env():
+        os.environ['GIT_DIR'] = os.path.abspath(repo_dir)
+    return env
 
 
-def _gitenv():
-    os.environ['GIT_DIR'] = os.path.abspath(repo())
+def list_refs(refname=None, repo_dir=None,
+              limit_to_heads=False, limit_to_tags=False):
+    """Yield (refname, hash) tuples for all repository refs unless a ref
+    name is specified.  Given a ref name, only include tuples for that
+    particular ref.  The limits restrict the result items to
+    refs/heads or refs/tags.  If both limits are specified, items from
+    both sources will be included.
 
-
-def list_refs(refname = None):
-    """Generate a list of tuples in the form (refname,hash).
-    If a ref name is specified, list only this particular ref.
     """
-    argv = ['git', 'show-ref', '--']
+    argv = ['git', 'show-ref']
+    if limit_to_heads:
+        argv.append('--heads')
+    if limit_to_tags:
+        argv.append('--tags')
+    argv.append('--')
     if refname:
         argv += [refname]
-    p = subprocess.Popen(argv, preexec_fn = _gitenv, stdout = subprocess.PIPE)
+    p = subprocess.Popen(argv,
+                         preexec_fn = _gitenv(repo_dir),
+                         stdout = subprocess.PIPE)
     out = p.stdout.read().strip()
     rv = p.wait()  # not fatal
     if rv:
@@ -785,9 +819,35 @@ def list_refs(refname = None):
             yield (name, sha.decode('hex'))
 
 
-def read_ref(refname):
+def object_info(objects, repo_dir=None):
+    """Yield (hash, type, size), tuples for each object named in objects.
+    The type will be 'commit', 'tree', 'blob', or 'missing'.  For now,
+    this accepts the same object names that git cat-file does.
+
+    """
+    p = subprocess.Popen(['git', 'cat-file', '--batch-check'],
+                         preexec_fn=_gitenv(repo_dir),
+                         stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE)
+    out, err = p.communicate('\n'.join(objects))
+    assert(p.returncode == 0)
+    out = out.strip()
+    if not out:
+        return
+    for line in out.split('\n'):
+        info = line.split(' ')
+        type = info[1]
+        if type == 'missing':
+            yield info[0].decode('hex'), type, None
+        else:  # id, type, size = info
+            yield info[0].decode('hex'), type, int(info[2])
+
+
+
+def read_ref(refname, repo_dir=None):
     """Get the commit id of the most recent commit made on a given ref."""
-    l = list(list_refs(refname))
+    refs = list_refs(refname, repo_dir=repo_dir, limit_to_heads=True)
+    l = tuple(islice(refs, 2))
     if l:
         assert(len(l) == 1)
         return l[0][1]
@@ -795,7 +855,7 @@ def read_ref(refname):
         return None
 
 
-def rev_list(ref, count=None):
+def rev_list(ref, count=None, repo_dir=None):
     """Generate a list of reachable commits in reverse chronological order.
 
     This generator walks through commits, from child to parent, that are
@@ -805,37 +865,63 @@ def rev_list(ref, count=None):
     If count is a non-zero integer, limit the number of commits to "count"
     objects.
     """
+    # We cache rev_list on disk because each call to rev_list involves a
+    # subprocess call to git, which takes a fraction of a second, and these
+    # add up to bup being *unusable* if there are thousands of branches.
+    # For some reason (?) bup calls rev_list on startup for *every*
+    # single branch in the repository before doing "bup ls",
+    # "bup restore", etc.
+
+    # Cache the git rev-list in a new directory called cache.
+    REV_CACHE = repo('cache/rev_list', repo_dir=repo_dir)
+    if not os.path.exists(REV_CACHE):
+        os.makedirs(REV_CACHE)
+
+    cache = os.path.join(REV_CACHE, ref)
+    if os.path.exists(cache):
+        v = pickle.loads(open(cache).read())
+        if count is None:
+            return v
+        else:
+            return v[:count]
+
     assert(not ref.startswith('-'))
-    opts = []
-    if count:
-        opts += ['-n', str(atoi(count))]
-    argv = ['git', 'rev-list', '--pretty=format:%at'] + opts + [ref, '--']
-    p = subprocess.Popen(argv, preexec_fn = _gitenv, stdout = subprocess.PIPE)
+    argv = ['git', 'rev-list', '--pretty=format:%at'] + [ref, '--']
+    p = subprocess.Popen(argv,
+                         preexec_fn = _gitenv(repo_dir),
+                         stdout = subprocess.PIPE)
     commit = None
+    v = []
     for row in p.stdout:
         s = row.strip()
         if s.startswith('commit '):
             commit = s[7:].decode('hex')
         else:
             date = int(s)
-            yield (date, commit)
+            v.append((date, commit))
     rv = p.wait()  # not fatal
     if rv:
         raise GitError, 'git rev-list returned error %d' % rv
 
+    open(cache,'wb').write(pickle.dumps(v))
+    if count is None:
+        return v
+    else:
+        return v[:count]
 
-def get_commit_dates(refs):
+
+def get_commit_dates(refs, repo_dir=None):
     """Get the dates for the specified commit refs.  For now, every unique
        string in refs must resolve to a different commit or this
        function will fail."""
     result = []
     for ref in refs:
-        commit = get_commit_items(ref, cp())
+        commit = get_commit_items(ref, cp(repo_dir))
         result.append(commit.author_sec)
     return result
 
 
-def rev_parse(committish):
+def rev_parse(committish, repo_dir=None):
     """Resolve the full hash for 'committish', if it exists.
 
     Should be roughly equivalent to 'git rev-parse'.
@@ -843,12 +929,12 @@ def rev_parse(committish):
     Returns the hex value of the hash if it is found, None if 'committish' does
     not correspond to anything.
     """
-    head = read_ref(committish)
+    head = read_ref(committish, repo_dir=repo_dir)
     if head:
         debug2("resolved from ref: commit = %s\n" % head.encode('hex'))
         return head
 
-    pL = PackIdxList(repo('objects/pack'))
+    pL = PackIdxList(repo('objects/pack', repo_dir=repo_dir))
 
     if len(committish) == 40:
         try:
@@ -862,14 +948,15 @@ def rev_parse(committish):
     return None
 
 
-def update_ref(refname, newval, oldval):
-    """Change the commit pointed to by a branch."""
+def update_ref(refname, newval, oldval, repo_dir=None):
+    """Update a repository reference."""
     if not oldval:
         oldval = ''
-    assert(refname.startswith('refs/heads/'))
+    assert(refname.startswith('refs/heads/') \
+           or refname.startswith('refs/tags/'))
     p = subprocess.Popen(['git', 'update-ref', refname,
                           newval.encode('hex'), oldval.encode('hex')],
-                         preexec_fn = _gitenv)
+                         preexec_fn = _gitenv(repo_dir))
     _git_wait('git update-ref', p)
 
 
@@ -899,16 +986,16 @@ def init_repo(path=None):
     if os.path.exists(d) and not os.path.isdir(os.path.join(d, '.')):
         raise GitError('"%s" exists but is not a directory\n' % d)
     p = subprocess.Popen(['git', '--bare', 'init'], stdout=sys.stderr,
-                         preexec_fn = _gitenv)
+                         preexec_fn = _gitenv())
     _git_wait('git init', p)
     # Force the index version configuration in order to ensure bup works
     # regardless of the version of the installed Git binary.
     p = subprocess.Popen(['git', 'config', 'pack.indexVersion', '2'],
-                         stdout=sys.stderr, preexec_fn = _gitenv)
+                         stdout=sys.stderr, preexec_fn = _gitenv())
     _git_wait('git config', p)
     # Enable the reflog
     p = subprocess.Popen(['git', 'config', 'core.logAllRefUpdates', 'true'],
-                         stdout=sys.stderr, preexec_fn = _gitenv)
+                         stdout=sys.stderr, preexec_fn = _gitenv())
     _git_wait('git config', p)
 
 
@@ -964,7 +1051,7 @@ def _git_wait(cmd, p):
 
 
 def _git_capture(argv):
-    p = subprocess.Popen(argv, stdout=subprocess.PIPE, preexec_fn = _gitenv)
+    p = subprocess.Popen(argv, stdout=subprocess.PIPE, preexec_fn = _gitenv())
     r = p.stdout.read()
     _git_wait(repr(argv), p)
     return r
@@ -1003,8 +1090,9 @@ class _AbortableIter:
 _ver_warned = 0
 class CatPipe:
     """Link to 'git cat-file' that is used to retrieve blob data."""
-    def __init__(self):
+    def __init__(self, repo_dir = None):
         global _ver_warned
+        self.repo_dir = repo_dir
         wanted = ('1','5','6')
         if ver() < wanted:
             if not _ver_warned:
@@ -1030,7 +1118,7 @@ class CatPipe:
                                   stdout=subprocess.PIPE,
                                   close_fds = True,
                                   bufsize = 4096,
-                                  preexec_fn = _gitenv)
+                                  preexec_fn = _gitenv(self.repo_dir))
 
     def _fast_get(self, id):
         if not self.p or self.p.poll() != None:
@@ -1079,7 +1167,7 @@ class CatPipe:
 
         p = subprocess.Popen(['git', 'cat-file', type, id],
                              stdout=subprocess.PIPE,
-                             preexec_fn = _gitenv)
+                             preexec_fn = _gitenv(self.repo_dir))
         for blob in chunkyreader(p.stdout):
             yield blob
         _git_wait('git cat-file', p)
@@ -1116,28 +1204,28 @@ class CatPipe:
             log('booger!\n')
 
 
-_cp = (None, None)
+_cp = {}
 
-def cp():
-    """Create a CatPipe object or reuse an already existing one."""
+def cp(repo_dir=None):
+    """Create a CatPipe object or reuse the already existing one."""
     global _cp
-    cp_dir, cp = _cp
-    cur_dir = os.path.realpath(repo())
-    if cur_dir != cp_dir:
-        cp = CatPipe()
-        _cp = (cur_dir, cp)
+    if not repo_dir:
+        repo_dir = repo()
+    repo_dir = os.path.abspath(repo_dir)
+    cp = _cp.get(repo_dir)
+    if not cp:
+        cp = CatPipe(repo_dir)
+        _cp[repo_dir] = cp
     return cp
 
 
-def tags():
+def tags(repo_dir = None):
     """Return a dictionary of all tags in the form {hash: [tag_names, ...]}."""
     tags = {}
-    for (n,c) in list_refs():
-        if n.startswith('refs/tags/'):
-            name = n[10:]
-            if not c in tags:
-                tags[c] = []
-
-            tags[c].append(name)  # more than one tag can point at 'c'
-
+    for (n,c) in list_refs(repo_dir = repo_dir, limit_to_tags=True):
+        assert(n.startswith('refs/tags/'))
+        name = n[10:]
+        if not c in tags:
+            tags[c] = []
+        tags[c].append(name)  # more than one tag can point at 'c'
     return tags

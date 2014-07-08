@@ -26,51 +26,54 @@ class Stat(fuse.Stat):
         self.st_rdev = 0
 
 
-cache = {}
-def cache_get(top, path):
-    parts = path.split('/')
-    cache[('',)] = top
-    c = None
-    max = len(parts)
-    #log('cache: %r\n' % cache.keys())
-    for i in range(max):
-        pre = parts[:max-i]
-        #log('cache trying: %r\n' % pre)
-        c = cache.get(tuple(pre))
-        if c:
-            rest = parts[max-i:]
-            for r in rest:
-                #log('resolving %r from %r\n' % (r, c.fullname()))
-                c = c.lresolve(r)
-                key = tuple(pre + [r])
-                #log('saving: %r\n' % (key,))
-                cache[key] = c
-            break
-    assert(c)
-    return c
-        
-    
-
 class BupFs(fuse.Fuse):
-    def __init__(self, top, meta=False):
+    def __init__(self, meta=False):
         fuse.Fuse.__init__(self)
-        self.top = top
+        self._top = vfs.RefList(None)
+        self._cache = {('',) : self._top}
         self.meta = meta
-    
+
+    def _cache_get(self, path):
+        if len(self._cache) > 10000:
+            self._top = vfs.RefList(None)
+            self._cache = {('',) : self._top}
+        cache = self._cache
+        parts = path.split('/')
+        c = None
+        max = len(parts)
+        #log('cache: %r\n' % cache.keys())
+        for i in range(max):
+            pre = tuple(parts[:max-i])
+            #log('cache trying: %r\n' % pre)
+            c = cache.get(pre)
+            if c:
+                rest = parts[max-i:]
+                for r in rest:
+                    #log('resolving %r from %r\n' % (r, c.fullname()))
+                    c = c.lresolve(r)
+                    c_p = pre + (r,)
+                    #log('saving: %r\n' % (c_p,))
+                    cache[c_p] = c
+                    pre = c_p
+                break
+        assert(c)
+        return c
+
     def getattr(self, path):
         log('--getattr(%r)\n' % path)
         try:
-            node = cache_get(self.top, path)
+            node = self._cache_get(path)
             st = Stat()
             st.st_mode = node.mode
             st.st_nlink = node.nlinks()
             st.st_size = node.size()  # Until/unless we store the size in m.
-            if self.meta:
-                m = node.metadata()
+            real_node = path.count('/') > 3
+            if real_node:
+                m = self.meta if self.meta else node.metadata()
                 if m:
                     st.st_mode = m.mode
-                    st.st_uid = m.uid
-                    st.st_gid = m.gid
+                    st.st_uid = opt.uid if opt.uid is not None else m.uid
+                    st.st_gid = opt.gid if opt.gid is not None else m.gid
                     st.st_atime = max(0, xstat.fstime_floor_secs(m.atime))
                     st.st_mtime = max(0, xstat.fstime_floor_secs(m.mtime))
                     st.st_ctime = max(0, xstat.fstime_floor_secs(m.ctime))
@@ -80,7 +83,7 @@ class BupFs(fuse.Fuse):
 
     def readdir(self, path, offset):
         log('--readdir(%r)\n' % path)
-        node = cache_get(self.top, path)
+        node = self._cache_get(path)
         yield fuse.Direntry('.')
         yield fuse.Direntry('..')
         for sub in node.subs():
@@ -88,12 +91,12 @@ class BupFs(fuse.Fuse):
 
     def readlink(self, path):
         log('--readlink(%r)\n' % path)
-        node = cache_get(self.top, path)
+        node = self._cache_get(path)
         return node.readlink()
 
     def open(self, path, flags):
         log('--open(%r)\n' % path)
-        node = cache_get(self.top, path)
+        node = self._cache_get(path)
         accmode = os.O_RDONLY | os.O_WRONLY | os.O_RDWR
         if (flags & accmode) != os.O_RDONLY:
             return -errno.EACCES
@@ -104,7 +107,7 @@ class BupFs(fuse.Fuse):
 
     def read(self, path, size, offset):
         log('--read(%r)\n' % path)
-        n = cache_get(self.top, path)
+        n = self._cache_get(path)
         o = n.open()
         o.seek(offset)
         return o.read(size)
@@ -122,6 +125,8 @@ d,debug   increase debug level
 f,foreground  run in foreground
 o,allow-other allow other users to access the filesystem
 meta          report original metadata for paths when available
+uid=    make all files appear to have this uid
+gid=    make all files appear to have this gid
 """
 o = options.Options(optspec)
 (opt, flags, extra) = o.parse(sys.argv[1:])
@@ -130,8 +135,7 @@ if len(extra) != 1:
     o.fatal("exactly one argument expected")
 
 git.check_repo_or_die()
-top = vfs.RefList(None)
-f = BupFs(top, meta=opt.meta)
+f = BupFs(meta=opt.meta)
 f.fuse_args.mountpoint = extra[0]
 if opt.debug:
     f.fuse_args.add('debug')
