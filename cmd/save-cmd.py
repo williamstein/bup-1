@@ -275,7 +275,7 @@ for (transname,ent) in r.filter(extra, wantrecurse=wantrecurse_during):
     if opt.progress:
         progress_report(0)
     fcount += 1
-    
+
     if not exists:
         continue
     if opt.smaller and ent.size >= opt.smaller:
@@ -384,7 +384,8 @@ for (transname,ent) in r.filter(extra, wantrecurse=wantrecurse_during):
                     lastskip_name = ent.name
         else:
             if stat.S_ISDIR(ent.mode):
-                assert(0)  # handled above
+                add_error("'%s' should not be a directory"%ent.name)
+                continue
             elif stat.S_ISLNK(ent.mode):
                 try:
                     rl = os.readlink(ent.name)
@@ -447,7 +448,7 @@ if opt.commit or opt.name:
 
 msr.close()
 w.close()  # must close before we can update the ref
-        
+
 if opt.name:
     if cli:
         cli.update_ref(refname, commit, oldref)
@@ -459,4 +460,3 @@ if cli:
 
 if saved_errors:
     log('WARNING: %d errors encountered while saving.\n' % len(saved_errors))
-    sys.exit(1)
