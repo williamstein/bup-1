@@ -255,6 +255,7 @@ def update_watcher(path, excluded_paths, exclude_rxs):
                 d = os.path.join(root, d)
                 if addfilter(d):
                     watcher.add(d, submask)
+        watcher.add(realpath, submask)
 
     if not watcher.watches():
         print('No files to watch')
